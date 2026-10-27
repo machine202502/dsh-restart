@@ -1,0 +1,17 @@
+{
+  "meta": {
+    "title": "Restart",
+    "description": "Restart DeepSeek Harness from the sidebar or from an agent tool, optionally continuing the same session afterwards."
+  },
+  "dialog": {
+    "title": "Restart DeepSeek Harness?",
+    "text": "The app closes and starts again. Running turns are interrupted.",
+    "continue": "Continue this session after the restart",
+    "cancel": "Cancel",
+    "restart": "Restart",
+    "restarting": "Restarting…"
+  },
+  "tool": {
+    "restarting": "Restarting DeepSeek Harness in a moment."
+  }
+}

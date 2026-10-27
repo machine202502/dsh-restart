@@ -1,0 +1,38 @@
+{
+  "name": "hsb-restart",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Restart DeepSeek Harness from the sidebar or from an agent tool, optionally continuing the same session afterwards.",
+  "license": "MIT",
+  "author": "machine202502",
+  "engines": {
+    "node": ">=20"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  }
+}
