@@ -688,8 +688,11 @@ export function apply(ctx, config = {}) {
   const registerRestartTool = () => ctx.tools.register({
     name: 'dsh_restart',
     description:
-      'Restart the DeepSeek Harness desktop app. Use it after changing plugin code or profile configuration that only takes effect on a fresh start. '
-      + 'The session is reopened afterwards and the message [auto.continue] is posted so the work resumes.',
+      'Restart the DeepSeek Harness desktop app so plugin or profile changes take effect. '
+      + 'Use it ONLY while developing or debugging DSH itself (plugin code, cordis.patch, profile config) and the user expects a restart; '
+      + 'never for ordinary work, never to refresh state, and never without a code or profile change that needs a fresh process. '
+      + 'A restart closes the app and kills running jobs and in-flight work; the session is reopened and [auto.continue] is posted so the work resumes. '
+      + 'If unsure, preflight with { fake: true } or read dsh_restart_status first.',
     parameters: obj({
       fake: {
         type: 'boolean',
