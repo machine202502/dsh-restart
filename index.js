@@ -2,7 +2,8 @@ import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createSettingsStore } from './src/settings.js';
 
 export const inject = ['tools'];
@@ -160,6 +161,9 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
   const backup = existsSync(good) ? good : null;
   const startedAt = new Date().toISOString();
   const timeoutSec = Math.min(120, Math.max(1, Number(watchdogSeconds) || 10));
+  // Chromium keeps one auth cookie per launch; stale ones overflow the header
+  // limit and break the welcome handshake (HTTP 431).
+  const cookieScript = join(dirname(fileURLToPath(import.meta.url)), 'src', 'cookie-clean.py');
 
   const quote = (value) => String(value).replace(/'/g, "''");
   const helper = [
@@ -173,6 +177,22 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
     `$startedAt = [datetime]'${startedAt}'`,
     `$token = '${quote(token)}'`,
     `$watchdog = '${quote(watchdogPath())}'`,
+    `$cookies = '${quote(cookieScript)}'`,
+    "function Purge-Cookies {",
+    "  $python = (Get-Command python.exe -ErrorAction SilentlyContinue).Source",
+    "  if (-not $python) {",
+    "    $candidate = Join-Path $env:USERPROFILE '.dsh\\dsh-runtimes\\dsh-primary-runtime\\dependencies\\python\\python.exe'",
+    "    if (Test-Path -LiteralPath $candidate) { $python = $candidate }",
+    "  }",
+    "  if ($python -and (Test-Path -LiteralPath $cookies)) { & $python $cookies *>> $log } else { Log 'cookie cleanup skipped: python or script missing' }",
+    "}",
+    "function AuthFailureSince($since) {",
+    "  $dir = Join-Path $env:APPDATA '@deepseek-ai\\dsh-desktop\\logs'",
+    "  if (-not (Test-Path -LiteralPath $dir)) { return $false }",
+    "  $file = Get-ChildItem -LiteralPath $dir -Filter 'crash-*.log' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 1",
+    "  if (-not $file -or $file.LastWriteTime -lt $since) { return $false }",
+    "  return [bool](Select-String -LiteralPath $file.FullName -Pattern 'Web authentication failed' -Quiet)",
+    "}",
     "function Log($m) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $m) }",
     "function FreshBoot($since) {",
     "  if (-not (Test-Path $boot)) { return $false }",
@@ -208,9 +228,17 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
     `& "$env:SystemRoot\\System32\\taskkill.exe" /PID ${appPid} /T /F *>> $log`,
     "Log 'killed'",
     "Start-Sleep -Milliseconds 1500",
+    "Purge-Cookies",
     "Start-Process -FilePath $exe",
     "Log 'started'",
     "if (Wait-Healthy $startedAt) { Log 'healthy'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
+    "if (AuthFailureSince $startedAt) {",
+    "  Log 'auth failure detected: purged stale cookies, retrying the start'",
+    "  Purge-Cookies",
+    "  Start-Process -FilePath $exe",
+    "  if (Wait-Healthy $startedAt) { Log 'healthy after cookie purge'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
+    "  Log 'still failing after the cookie purge'",
+    "}",
     "if (-not (HashesMatch)) { Log 'token invalidated or files changed manually: skipping the rollback'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
     "Log 'timeout: rolling back the profile backup'",
     "if ($backup -ne '' -and (Test-Path $backup)) { Copy-Item -Path (Join-Path $backup '*') -Destination $profile -Force -Recurse -ErrorAction SilentlyContinue }",
@@ -246,7 +274,11 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
       "Add-Content -LiteralPath $log -Value ('plain restart ' + (Get-Date -Format o))",
       `Start-Sleep -Milliseconds ${delayMs}`,
       `& "$env:SystemRoot\\System32\\taskkill.exe" /PID ${appPid} /T /F *>> $log`,
-      'Start-Sleep -Milliseconds 1500',
+      "Start-Sleep -Milliseconds 1500",
+      "$python = (Get-Command python.exe -ErrorAction SilentlyContinue).Source",
+      "if (-not $python) { $candidate = Join-Path $env:USERPROFILE '.dsh\\\\dsh-runtimes\\\\dsh-primary-runtime\\\\dependencies\\\\python\\\\python.exe'; if (Test-Path -LiteralPath $candidate) { $python = $candidate } }",
+      `$scripts = '${cookieScript.replace(/'/g, "''")}'`,
+      "if ($python -and (Test-Path -LiteralPath $scripts)) { & $python $scripts *>> $log }",
       `Start-Process -FilePath '${exe.replace(/'/g, "''")}'`,
       "& \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log",
     ].join('\r\n');

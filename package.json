@@ -22,7 +22,8 @@
     "locale/*.json",
     "icon.svg",
     "README.md",
-    "src/*.js"
+    "src/*.js",
+    "src/*.py"
   ],
   "dsh": {
     "bundle": {

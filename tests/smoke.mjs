@@ -10,7 +10,7 @@ const ctx = {
   logger: { warn: (message) => console.warn(message) },
 };
 
-apply(ctx, { bridgePort: 49234 });
+apply(ctx, { bridgePort: 49399 });
 
 const check = (name, ok, detail = '') => console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  — ${detail}` : ''}`);
 
@@ -20,7 +20,7 @@ check('only fake is tunable', Object.keys(schema?.properties ?? {}).join(',') ==
 
 // The bridge starts on the next tick so plugin activation never waits for it.
 await new Promise((resolve) => setTimeout(resolve, 100));
-const base = 'http://127.0.0.1:49234';
+const base = 'http://127.0.0.1:49399';
 const health = await fetch(`${base}/health`).then((response) => response.json());
 check('bridge listens', health.ok === true, `appPid ${health.appPid}`);
 
