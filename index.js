@@ -24,6 +24,19 @@ const markerPath = () => join(dataDir(), 'pending.json');
 const failedPath = () => join(dataDir(), 'failed.json');
 const bootPath = () => join(dataDir(), 'boot.json');
 const watchdogPath = () => join(dataDir(), 'watchdog.json');
+
+/** SHA-256 of the profile files a rollback would overwrite. */
+const profileHashes = (profileDir) => {
+  const out = {};
+  for (const name of ['package.json', 'cordis.patch.yml', 'cordis.yml']) {
+    try {
+      out[name] = createHash('sha256').update(readFileSync(join(profileDir, name))).digest('hex');
+    } catch {
+      // A missing file has no hash and is skipped on both sides.
+    }
+  }
+  return out;
+};
 const backupRoot = () => join(dataDir(), 'backup');
 
 /**
@@ -165,9 +178,21 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
     "  if (-not (Test-Path $boot)) { return $false }",
     "  try { $b = Get-Content -LiteralPath $boot -Raw | ConvertFrom-Json; return ([datetime]$b.at -gt $since) } catch { return $false }",
     "}",
-    "function TokenAlive {",
+    "function HashesMatch {",
     "  if (-not (Test-Path $watchdog)) { return $false }",
-    "  try { $state = Get-Content -LiteralPath $watchdog -Raw | ConvertFrom-Json; return ($state.token -eq $token) } catch { return $false }",
+    "  try {",
+    "    $state = Get-Content -LiteralPath $watchdog -Raw | ConvertFrom-Json",
+    "    if ($state.token -ne $token) { return $false }",
+    "    foreach ($name in @('package.json', 'cordis.patch.yml', 'cordis.yml')) {",
+    "      $expected = $state.hashes.$name",
+    "      if ($null -eq $expected -or $expected -eq '') { continue }",
+    "      $path = Join-Path $profile $name",
+    "      if (-not (Test-Path -LiteralPath $path)) { return $false }",
+    "      $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash",
+    "      if ($actual -ne $expected) { return $false }",
+    "    }",
+    "    return $true",
+    "  } catch { return $false }",
     "}",
     "function Wait-Healthy($since) {",
     `  $deadline = (Get-Date).AddSeconds(${timeoutSec})`,
@@ -186,7 +211,7 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
     "Start-Process -FilePath $exe",
     "Log 'started'",
     "if (Wait-Healthy $startedAt) { Log 'healthy'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
-    "if (-not (TokenAlive)) { Log 'token invalidated: another boot or restart owns the app'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
+    "if (-not (HashesMatch)) { Log 'token invalidated or files changed manually: skipping the rollback'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
     "Log 'timeout: rolling back the profile backup'",
     "if ($backup -ne '' -and (Test-Path $backup)) { Copy-Item -Path (Join-Path $backup '*') -Destination $profile -Force -Recurse -ErrorAction SilentlyContinue }",
     "$payload = ConvertTo-Json @{ failed = $true; at = (Get-Date).ToString('o') }",
@@ -378,7 +403,14 @@ export function apply(ctx, config = {}) {
     writeMarker(marker);
     // The watchdog is bound to this restart only: any later boot or restart
     // replaces/removes this file, and the stale watchdog then does nothing.
-    writeFileSync(watchdogPath(), JSON.stringify({ token, at: marker.at, sessionId: marker.sessionId }, null, 2));
+    writeFileSync(watchdogPath(), JSON.stringify({
+      token,
+      at: marker.at,
+      sessionId: marker.sessionId,
+      // A rollback is only safe while the files are still the ones this
+      // restart started from; any manual edit cancels it.
+      hashes: profileHashes(profileDir),
+    }, null, 2));
     try {
       await scheduleRestart({ appPid, exe, profileDir, token, ...effective() });
     } catch (error) {
