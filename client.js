@@ -435,8 +435,8 @@ window.__ModuleLoader__.load({
         return;
       }
       if (failed) pending = { ...(pending ?? {}), failed: true };
-      // A pending queue keeps its messages; resuming would deliver them.
-      if (queued) {
+      // A failed recovery is always reported, even when a queue is waiting.
+      if (!failed && queued) {
         diag('skip-queued', {});
         return;
       }
