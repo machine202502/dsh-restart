@@ -15,6 +15,8 @@ window.__ModuleLoader__.load({
         restart: 'Restart',
         restarting: 'Restarting…',
         tooltip: 'Restart DeepSeek Harness',
+        rowLabel: 'Restart DeepSeek Harness',
+        failed: 'Could not restart',
       },
       ru: {
         title: 'Перезапустить DeepSeek Harness?',
@@ -24,6 +26,8 @@ window.__ModuleLoader__.load({
         restart: 'Перезапустить',
         restarting: 'Перезапускаю…',
         tooltip: 'Перезапустить DeepSeek Harness',
+        rowLabel: 'Перезапустить DeepSeek Harness',
+        failed: 'Не удалось перезапустить',
       },
     };
 
@@ -34,7 +38,7 @@ window.__ModuleLoader__.load({
 
     const PORT = 49233;
     const base = `http://127.0.0.1:${PORT}`;
-    const CONTINUE_TEXT = 'continue';
+    const CONTINUE_TEXT = '[auto.continue]';
 
     const ensureStyles = () => {
       if (typeof document === 'undefined') return;
@@ -42,24 +46,34 @@ window.__ModuleLoader__.load({
       const tag = document.createElement('style');
       tag.dataset.plugin = 'hsb-restart';
       tag.textContent = `
-.hr-footer-button { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px;
-  border: none; border-radius: 8px; background: transparent; color: var(--dsw-alias-label-secondary, #5f5f63); cursor: pointer; }
-.hr-footer-button:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.06)); color: var(--dsw-alias-label-primary, #1b1b1f); }
-.hr-overlay { position: fixed; inset: 0; z-index: 4000; display: flex; align-items: center; justify-content: center;
-  background: rgba(12,12,14,.45); }
-.hr-dialog { width: 380px; max-width: calc(100vw - 32px); border-radius: 14px; padding: 18px 18px 14px;
-  background: var(--dsw-alias-bg-l1, #fff); color: var(--dsw-alias-label-primary, #1b1b1f);
-  box-shadow: 0 24px 64px rgba(0,0,0,.28); border: .5px solid var(--dsw-alias-border-l2, rgba(0,0,0,.12)); }
-.hr-title { font-size: 15px; font-weight: 600; margin: 0 0 6px; }
-.hr-text { font-size: 13px; line-height: 19px; color: var(--dsw-alias-label-secondary, #5f5f63); margin: 0 0 12px; }
-.hr-check { display: flex; align-items: center; gap: 8px; font-size: 13px; margin: 0 0 16px; cursor: pointer; }
-.hr-check input { width: 14px; height: 14px; accent-color: var(--dsw-alias-accent, #4d6bfe); }
-.hr-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.hr-btn { height: 30px; padding: 0 14px; border-radius: 8px; font-size: 13px; cursor: pointer;
-  border: .5px solid var(--dsw-alias-border-l2, rgba(0,0,0,.14)); background: transparent; color: inherit; }
-.hr-btn:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0,0,0,.05)); }
-.hr-btn-primary { border-color: transparent; background: var(--dsw-alias-accent, #4d6bfe); color: #fff; }
-.hr-btn-primary:hover { filter: brightness(1.05); }
+/* Mirrors the account row below it: 260x44, 6px padding, 8px gap, 12px radius,
+   14px label, 24px avatar circle. */
+.hr-footer-button { display: flex; align-items: center; gap: 8px; width: 260px; height: 44px;
+  flex: none; margin-left: -2px; padding: 6px; border: none; border-radius: 12px; background: transparent;
+  font: inherit; font-size: 14px; color: var(--dsw-alias-label-primary, #1b1b1f);
+  cursor: pointer; text-align: left; }
+.hr-footer-button:hover { background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, .05)); }
+.hr-footer-icon { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px;
+  flex: none; border-radius: 999px; overflow: hidden;
+  background: var(--dsw-alias-interactive-bg, rgba(0, 0, 0, .04));
+  color: var(--dsw-alias-label-secondary, #5f5f63); }
+.hr-footer-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.hr-overlay { position: fixed; inset: 0; z-index: 4000; display: flex; align-items: center;
+  justify-content: center; padding: 24px; background: rgba(0, 0, 0, .24); }
+.hr-dialog { width: 380px; max-width: 100%; max-height: 100%; overflow: auto; padding: 0 0 24px;
+  border-radius: 28px; background: var(--dsw-alias-bg-l1, #fff); color: var(--dsw-alias-label-primary, #0f1115);
+  box-shadow: 0 0 0 .5px rgba(0, 0, 0, .16), 0 3px 8px rgba(0, 0, 0, .04), 0 0 20px rgba(0, 0, 0, .05); }
+.hr-header { padding: 22px 24px 12px; }
+.hr-title { margin: 0; font-size: 16px; line-height: 24px; font-weight: 500; }
+.hr-error { padding: 0 24px 12px; font-size: 13px; line-height: 18px; color: var(--dsw-alias-label-danger, #e5484d); }
+.hr-actions { display: flex; justify-content: flex-end; gap: 8px; padding: 0 24px; }
+.hr-btn { height: 36px; padding: 0 14px; border-radius: 12px; border: .5px solid rgba(0, 0, 0, .1);
+  background: transparent; color: var(--dsw-alias-label-primary, #0f1115); font: inherit;
+  font-size: 14px; line-height: 22px; cursor: pointer; }
+.hr-btn:hover { background: rgba(0, 0, 0, .05); }
+.hr-btn-primary { padding: 0 16px; border-color: transparent; background: var(--dsw-alias-label-primary, #0f1115);
+  color: #fff; font-weight: 500; }
+.hr-btn-primary:hover { background: #000; }
 .hr-btn[disabled] { opacity: .6; cursor: default; }
 `;
       document.head.appendChild(tag);
@@ -71,7 +85,9 @@ window.__ModuleLoader__.load({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body ?? {}),
       });
-      return response.ok ? response.json().catch(() => ({})) : null;
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data?.error ?? `HTTP ${response.status}`);
+      return data;
     };
 
     const diag = (stage, data) => {
@@ -107,63 +123,98 @@ window.__ModuleLoader__.load({
 
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    /** Best-effort: type "continue" into the composer and submit it. */
+    const DRAFT_KEY = 'hsb-restart:draft';
+
+    const saveDraft = (text) => {
+      try { window.localStorage.setItem(DRAFT_KEY, text); } catch { /* storage off */ }
+    };
+    const loadDraft = () => {
+      try { return window.localStorage.getItem(DRAFT_KEY) ?? ''; } catch { return ''; }
+    };
+    const dropDraft = () => {
+      try { window.localStorage.removeItem(DRAFT_KEY); } catch { /* storage off */ }
+    };
+
+    const setComposerText = (area, text) => {
+      focusEditor(area);
+      if (area instanceof HTMLTextAreaElement) {
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+        setter?.call(area, text);
+        area.dispatchEvent(new Event('input', { bubbles: true }));
+        return;
+      }
+      document.execCommand('selectAll');
+      if (text.length === 0) {
+        document.execCommand('delete');
+      } else {
+        document.execCommand('insertText', false, text);
+      }
+    };
+
+    /** Best-effort: post the auto-continue marker while keeping the user's draft. */
     const submitContinue = async () => {
       const area = findComposer();
       if (!area) return { ok: false, reason: 'no composer' };
 
-      const clear = async () => {
-        if (editorText(area) === '') return;
-        focusEditor(area);
-        if (area instanceof HTMLTextAreaElement) {
-          const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-          setter?.call(area, '');
-          area.dispatchEvent(new Event('input', { bubbles: true }));
-        } else {
-          document.execCommand('selectAll');
-          document.execCommand('delete');
+      // Keep whatever the user was typing: park it, send the marker, put it back.
+      const draft = editorText(area);
+      if (draft !== '' && draft !== CONTINUE_TEXT) saveDraft(draft);
+      if (draft !== '') {
+        setComposerText(area, '');
+        await sleep(200);
+      }
+
+      const restoreDraft = () => {
+        const parked = loadDraft();
+        if (!parked) return;
+        const current = editorText(area);
+        if (current === '') {
+          setComposerText(area, parked);
+          dropDraft();
         }
-        await sleep(150);
       };
 
-      for (const delay of [0, 300, 700, 1400]) {
-        if (delay) await sleep(delay);
-        await clear();
+      focusEditor(area);
+      if (area instanceof HTMLTextAreaElement) {
+        const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+        setter?.call(area, CONTINUE_TEXT);
+        area.dispatchEvent(new Event('input', { bubbles: true }));
+      } else {
+        document.execCommand('insertText', false, CONTINUE_TEXT);
+      }
 
-        focusEditor(area);
-        if (area instanceof HTMLTextAreaElement) {
-          const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-          setter?.call(area, CONTINUE_TEXT);
-          area.dispatchEvent(new Event('input', { bubbles: true }));
-        } else {
-          document.execCommand('insertText', false, CONTINUE_TEXT);
+      for (let tick = 0; tick < 12; tick++) {
+        await sleep(150);
+        // Only the marker itself may ever be submitted.
+        if (editorText(area) !== CONTINUE_TEXT) {
+          if (editorText(area) === '') continue;
+          restoreDraft();
+          return { ok: false, reason: 'composer changed' };
         }
-
-        // The editor updates its model asynchronously: wait for the send button
-        // to accept the draft before clicking it.
-        for (let tick = 0; tick < 12; tick++) {
-          await sleep(150);
-          const send = findSendButton();
-          if (send === undefined || send.disabled) continue;
-          send.click();
-          await sleep(300);
-          if (editorText(area) === '') return { ok: true, via: 'button' };
+        const send = findSendButton();
+        if (send === undefined || send.disabled) continue;
+        send.click();
+        await sleep(300);
+        if (editorText(area) === '') {
+          restoreDraft();
+          return { ok: true, via: 'button', draftKept: draft !== '' };
         }
+      }
 
+      // Last resort: Enter, but again only for the marker text.
+      if (editorText(area) === CONTINUE_TEXT) {
         const key = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
         area.dispatchEvent(new KeyboardEvent('keydown', key));
         area.dispatchEvent(new KeyboardEvent('keyup', key));
         await sleep(300);
-        if (editorText(area) === '') return { ok: true, via: 'enter' };
+        if (editorText(area) === '') {
+          restoreDraft();
+          return { ok: true, via: 'enter', draftKept: draft !== '' };
+        }
       }
 
-      return {
-        ok: false,
-        reason: 'not submitted',
-        text: editorText(area),
-        send: findSendButton()?.getAttribute('aria-label') ?? null,
-        focused: document.hasFocus(),
-      };
+      restoreDraft();
+      return { ok: false, reason: 'not submitted', text: editorText(area) };
     };
 
     const el = (tag, className, text) => {
@@ -174,42 +225,57 @@ window.__ModuleLoader__.load({
     };
 
     /** Confirmation dialog as plain DOM: react-dom is not in the module table. */
-    const openDialog = ({ sessionId, onClose }) => {
+    const openDialog = ({ sessionId, strings, onClose }) => {
       ensureStyles();
       const overlay = el('div', 'hr-overlay');
       const dialog = el('div', 'hr-dialog');
       dialog.setAttribute('role', 'dialog');
       dialog.setAttribute('aria-modal', 'true');
 
-      const title = el('div', 'hr-title', LOCALE.title);
+      const header = el('div', 'hr-header');
+      const title = el('h2', 'hr-title', strings.title);
       title.id = 'hr-title';
       dialog.setAttribute('aria-labelledby', 'hr-title');
-      dialog.append(title);
-      dialog.append(el('div', 'hr-text', LOCALE.text));
-
-      const check = el('label', 'hr-check');
-      const box = document.createElement('input');
-      box.type = 'checkbox';
-      box.checked = true;
-      check.append(box, document.createTextNode(` ${LOCALE.keep}`));
-      dialog.append(check);
+      header.append(title);
+      dialog.append(header);
 
       const actions = el('div', 'hr-actions');
-      const cancel = el('button', 'hr-btn', LOCALE.cancel);
-      const restart = el('button', 'hr-btn hr-btn-primary', LOCALE.restart);
+      const cancel = el('button', 'hr-btn', strings.cancel);
+      const restart = el('button', 'hr-btn hr-btn-primary', strings.restart);
       restart.type = 'button';
       cancel.type = 'button';
       actions.append(cancel, restart);
       dialog.append(actions);
+      const error = el('div', 'hr-error');
+      error.hidden = true;
+      dialog.append(error);
       overlay.append(dialog);
 
       let busy = false;
+      const previousFocus = document.activeElement;
       const close = () => {
         overlay.remove();
         document.removeEventListener('keydown', onKey);
+        if (previousFocus instanceof HTMLElement) previousFocus.focus();
         onClose?.();
       };
-      const onKey = (event) => { if (event.key === 'Escape' && !busy) close(); };
+      const onKey = (event) => {
+        if (event.key === 'Escape' && !busy) {
+          event.preventDefault();
+          close();
+          return;
+        }
+        // Keep Tab inside the dialog, the way the host modal does.
+        if (event.key !== 'Tab') return;
+        const focusable = [cancel, restart].filter((button) => !button.disabled);
+        if (focusable.length === 0) return;
+        const index = focusable.indexOf(document.activeElement);
+        const next = event.shiftKey
+          ? (index <= 0 ? focusable[focusable.length - 1] : focusable[index - 1])
+          : (index === -1 || index === focusable.length - 1 ? focusable[0] : focusable[index + 1]);
+        event.preventDefault();
+        next.focus();
+      };
 
       overlay.addEventListener('click', () => { if (!busy) close(); });
       dialog.addEventListener('click', (event) => event.stopPropagation());
@@ -218,14 +284,22 @@ window.__ModuleLoader__.load({
         busy = true;
         restart.disabled = true;
         cancel.disabled = true;
-        restart.textContent = LOCALE.restarting;
+        restart.textContent = strings.restarting;
+        error.hidden = true;
         if (sessionId) {
           try { window.localStorage.setItem('hsb-restart:session', sessionId); } catch { /* storage off */ }
         }
         try {
-          await post('/restart', { continue: box.checked, sessionId: sessionId ?? null });
-        } catch { /* the app is about to restart anyway */ }
-        close();
+          // The restart always reopens this session and posts "continue".
+          await post('/restart', { sessionId: sessionId ?? null });
+        } catch (failure) {
+          busy = false;
+          restart.disabled = false;
+          cancel.disabled = false;
+          restart.textContent = strings.restart;
+          error.textContent = `${strings.failed}: ${failure?.message ?? failure}`;
+          error.hidden = false;
+        }
       });
 
       document.addEventListener('keydown', onKey);
@@ -234,21 +308,44 @@ window.__ModuleLoader__.load({
     };
 
     const PowerIcon = () => h('svg', {
-      width: 16, height: 16, viewBox: '0 0 16 16', fill: 'none',
+      width: 14, height: 14, viewBox: '0 0 16 16', fill: 'none',
       stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round',
     },
     h('path', { d: 'M8 2.2v5.2' }),
     h('path', { d: 'M4.4 4.2a5.1 5.1 0 1 0 7.2 0' }));
 
+    const tr = (t, key, fallback) => {
+      if (typeof t !== 'function') return fallback;
+      try {
+        const value = t(key);
+        return typeof value === 'string' && value.length > 0 && value !== key ? value : fallback;
+      } catch {
+        return fallback;
+      }
+    };
+
     function RestartButton(props) {
       ensureStyles();
       const slotSession = props?.sessionId ?? props?.session?.id ?? null;
+      const t = props?.t;
+      const strings = {
+        title: tr(t, 'dialog.title', LOCALE.title),
+        cancel: tr(t, 'dialog.cancel', LOCALE.cancel),
+        restart: tr(t, 'dialog.restart', LOCALE.restart),
+        restarting: tr(t, 'dialog.restarting', LOCALE.restarting),
+        tooltip: tr(t, 'dialog.tooltip', LOCALE.tooltip),
+        failed: tr(t, 'dialog.failed', LOCALE.failed),
+        label: tr(t, 'dialog.row', LOCALE.rowLabel),
+      };
       return h('button', {
         className: 'hr-footer-button',
-        title: LOCALE.tooltip,
-        'aria-label': LOCALE.tooltip,
-        onClick: () => openDialog({ sessionId: slotSession ?? lastSessionId(), onClose: () => {} }),
-      }, h(PowerIcon));
+        title: strings.tooltip,
+        'aria-label': strings.tooltip,
+        onClick: () => openDialog({ sessionId: slotSession ?? lastSessionId(), strings, onClose: () => {} }),
+      },
+        h('span', { className: 'hr-footer-icon' }, h(PowerIcon)),
+        h('span', { className: 'hr-footer-label' }, strings.label),
+      );
     }
 
     const lastSessionId = () => {
@@ -258,11 +355,19 @@ window.__ModuleLoader__.load({
     /** After a restart with "continue", reopen the session and submit the text. */
     const resumeAfterRestart = async (uiWorkspace) => {
       let pending = null;
+      let queued = false;
       try {
-        const response = await fetch(`${base}/pending`);
+        const response = await fetch(`${base}/claim`);
         if (!response.ok) return;
-        pending = (await response.json())?.pending ?? null;
+        const claimed = await response.json();
+        pending = claimed?.marker ?? null;
+        queued = claimed?.queued === true;
       } catch {
+        return;
+      }
+      // A pending queue keeps its messages; resuming would deliver them.
+      if (queued) {
+        diag('skip-queued', {});
         return;
       }
       diag('boot', { pending, hasWorkspace: Boolean(uiWorkspace) });
@@ -281,10 +386,7 @@ window.__ModuleLoader__.load({
         await new Promise((resolve) => setTimeout(resolve, delay));
         const result = await submitContinue();
         diag('submit', result);
-        if (result.ok) {
-          await post('/consumed', {});
-          return;
-        }
+        if (result.ok) return;
       }
       diag('gave-up', {});
     };
@@ -317,20 +419,11 @@ window.__ModuleLoader__.load({
             name: 'sidebar.footer.action',
             id: 'restart',
             order: 90,
+            locale: 'restart',
+            inject: (sessionId, t) => ({ sessionId, t }),
           }, RestartButton));
         } catch (error) {
           console.warn('hsb-restart: footer slot failed', error);
-        }
-        // A visible fallback near the composer: the sidebar footer collapses on
-        // narrow windows, the composer dock does not.
-        try {
-          ctx.slots.inject('conversation.input.dock', () => ctx.slots.register({
-            name: 'conversation.input.dock',
-            id: 'restart',
-            order: 95,
-          }, RestartButton));
-        } catch (error) {
-          console.warn('hsb-restart: dock slot failed', error);
         }
         diag('applied', { hasEffect: typeof ctx.effect, hasWorkspace: typeof ctx.uiWorkspace });
         // Plain timer: a slot-scoped effect can be disposed before it fires, and

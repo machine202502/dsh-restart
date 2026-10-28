@@ -1,17 +1,15 @@
 {
   "meta": {
     "title": "Restart",
-    "description": "Перезапуск DeepSeek Harness из сайдбара или инструментом агента, с опцией продолжить ту же сессию."
+    "description": "Перезапуск DeepSeek Harness одной кнопкой с продолжением текущей сессии."
   },
   "dialog": {
     "title": "Перезапустить DeepSeek Harness?",
-    "text": "Приложение закроется и запустится заново. Текущие ходы будут прерваны.",
-    "continue": "Продолжить сессию после перезапуска",
     "cancel": "Отмена",
     "restart": "Перезапустить",
-    "restarting": "Перезапускаю…"
-  },
-  "tool": {
-    "restarting": "Перезапускаю DeepSeek Harness."
+    "restarting": "Перезапускаю…",
+    "tooltip": "Перезапустить DeepSeek Harness",
+    "row": "Перезапустить DeepSeek Harness",
+    "failed": "Не удалось перезапустить"
   }
 }
