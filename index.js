@@ -429,7 +429,10 @@ export function apply(ctx, config = {}) {
       at: new Date().toISOString(),
       reason: options.reason ?? 'manual',
     };
-    writeMarker(marker);
+    // Only the agent tool resumes the session; a manual restart from the
+    // sidebar just brings the app back.
+    if (options.continue === false) clearMarker();
+    else writeMarker(marker);
     // The watchdog is bound to this restart only: any later boot or restart
     // replaces/removes this file, and the stale watchdog then does nothing.
     writeFileSync(watchdogPath(), JSON.stringify({
@@ -586,7 +589,7 @@ export function apply(ctx, config = {}) {
             send(200, { ok: true, fake: true, marker: null });
             return;
           }
-          const marker = await request({ sessionId: parsed.sessionId, reason: 'ui' });
+          const marker = await request({ sessionId: parsed.sessionId, reason: 'ui', continue: false });
           send(200, { ok: true, marker });
         } catch (error) {
           send(500, { ok: false, error: String(error.message ?? error) });
