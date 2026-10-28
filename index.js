@@ -23,6 +23,7 @@ const dataDir = () => (process.platform === 'win32'
 const markerPath = () => join(dataDir(), 'pending.json');
 const failedPath = () => join(dataDir(), 'failed.json');
 const bootPath = () => join(dataDir(), 'boot.json');
+const watchdogPath = () => join(dataDir(), 'watchdog.json');
 const backupRoot = () => join(dataDir(), 'backup');
 
 /**
@@ -133,7 +134,7 @@ const runTask = (args) => new Promise((resolve) => {
   child.on('close', (code) => resolve({ code: code ?? -1, stderr }));
 });
 
-const scheduleRestart = async ({ appPid, exe, profileDir, watchdogEnabled = true, watchdogSeconds = 10, delayMs = 1200 }) => {
+const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEnabled = true, watchdogSeconds = 10, delayMs = 1200 }) => {
   mkdirSync(dataDir(), { recursive: true });
   const helperPath = join(dataDir(), 'restart-helper.ps1');
   const logPath = join(dataDir(), 'restart.log');
@@ -157,10 +158,16 @@ const scheduleRestart = async ({ appPid, exe, profileDir, watchdogEnabled = true
     `$profile = '${quote(profileDir)}'`,
     `$exe = '${quote(exe)}'`,
     `$startedAt = [datetime]'${startedAt}'`,
+    `$token = '${quote(token)}'`,
+    `$watchdog = '${quote(watchdogPath())}'`,
     "function Log($m) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $m) }",
     "function FreshBoot($since) {",
     "  if (-not (Test-Path $boot)) { return $false }",
     "  try { $b = Get-Content -LiteralPath $boot -Raw | ConvertFrom-Json; return ([datetime]$b.at -gt $since) } catch { return $false }",
+    "}",
+    "function TokenAlive {",
+    "  if (-not (Test-Path $watchdog)) { return $false }",
+    "  try { $state = Get-Content -LiteralPath $watchdog -Raw | ConvertFrom-Json; return ($state.token -eq $token) } catch { return $false }",
     "}",
     "function Wait-Healthy($since) {",
     `  $deadline = (Get-Date).AddSeconds(${timeoutSec})`,
@@ -179,6 +186,7 @@ const scheduleRestart = async ({ appPid, exe, profileDir, watchdogEnabled = true
     "Start-Process -FilePath $exe",
     "Log 'started'",
     "if (Wait-Healthy $startedAt) { Log 'healthy'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
+    "if (-not (TokenAlive)) { Log 'token invalidated: another boot or restart owns the app'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
     "Log 'timeout: rolling back the profile backup'",
     "if ($backup -ne '' -and (Test-Path $backup)) { Copy-Item -Path (Join-Path $backup '*') -Destination $profile -Force -Recurse -ErrorAction SilentlyContinue }",
     "Set-Content -LiteralPath $failed -Value (ConvertTo-Json @{ failed = $true; at = (Get-Date).ToString('o') }) -Encoding UTF8",
@@ -193,7 +201,8 @@ const scheduleRestart = async ({ appPid, exe, profileDir, watchdogEnabled = true
     "try {",
     "  $pkg = Get-Content -LiteralPath $pkgPath -Raw | ConvertFrom-Json",
     "  $pkg.dsh.profile.bundles = @($pkg.dsh.profile.bundles | Where-Object { $_ -ne 'hsb-restart' })",
-    "  ($pkg | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath $pkgPath -Encoding UTF8",
+    "  $json = $pkg | ConvertTo-Json -Depth 12",
+    "  [System.IO.File]::WriteAllText($pkgPath, $json, (New-Object System.Text.UTF8Encoding($false)))",
     "  Log 'hsb-restart bundle removed from the profile'",
     "} catch { Log ('disable failed: ' + $_) }",
     "Kill-App",
@@ -274,10 +283,12 @@ export function apply(ctx, config = {}) {
   // Last configuration that booted successfully: the rollback target.
   snapshotGood(profileDir);
 
-  // Proof of a healthy boot for the restart watchdog.
+  // Proof of a healthy boot for the restart watchdog; also invalidates the
+  // restart token, so a watchdog from an earlier restart cannot touch this run.
   try {
     mkdirSync(dataDir(), { recursive: true });
     writeFileSync(bootPath(), JSON.stringify({ at: new Date().toISOString(), pid: process.pid }));
+    rmSync(watchdogPath(), { force: true });
   } catch {
     // The marker is only used by the watchdog.
   }
@@ -354,16 +365,21 @@ export function apply(ctx, config = {}) {
   const appPid = process.ppid;
 
   const request = async (options) => {
+    const token = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
     const marker = {
       // A restart always resumes the session: the chat gets "continue".
       continue: true,
+      token,
       sessionId: typeof options.sessionId === 'string' && options.sessionId.length > 0 ? options.sessionId : null,
       at: new Date().toISOString(),
       reason: options.reason ?? 'manual',
     };
     writeMarker(marker);
+    // The watchdog is bound to this restart only: any later boot or restart
+    // replaces/removes this file, and the stale watchdog then does nothing.
+    writeFileSync(watchdogPath(), JSON.stringify({ token, at: marker.at, sessionId: marker.sessionId }, null, 2));
     try {
-      await scheduleRestart({ appPid, exe, profileDir, ...effective() });
+      await scheduleRestart({ appPid, exe, profileDir, token, ...effective() });
     } catch (error) {
       clearMarker();
       throw error;
