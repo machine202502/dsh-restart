@@ -709,7 +709,7 @@ export function apply(ctx, config = {}) {
     execute: async (args, exec) => {
       const depth = exec?.agent?.options?.subagentDepth;
       if (exec?.parent !== undefined || (typeof depth === 'number' && depth > 0)) {
-        throw new Error('dsh_restart is only available to the main agent: a subagent cannot restart the app');
+        throw new Error('dsh_restart is only available to the main agent: a subagent cannot restart the app; do not retry, report the need to the parent agent instead');
       }
       const agent = exec?.agent;
       const service = (name) => {
