@@ -3,3 +3,6 @@
       name: 'hsb-restart'
       config:
         bridgePort: 49233
+        toolEnabled: true
+        watchdogEnabled: true
+        watchdogSeconds: 10

@@ -1,10 +1,12 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { createSettingsStore } from './src/settings.js';
 
 export const inject = ['tools'];
+
 
 const obj = (properties = {}, required = []) => ({
   type: 'object',
@@ -19,6 +21,9 @@ const dataDir = () => (process.platform === 'win32'
   : join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'), 'hsb-restart'));
 
 const markerPath = () => join(dataDir(), 'pending.json');
+const failedPath = () => join(dataDir(), 'failed.json');
+const bootPath = () => join(dataDir(), 'boot.json');
+const backupRoot = () => join(dataDir(), 'backup');
 
 /**
  * Session ids known to the workspace store.
@@ -76,6 +81,43 @@ const clearMarker = () => {
 };
 
 /**
+ * Copy the profile's user-editable layers next to the restart marker.
+ * Those are the files that make the app unbootable when they are wrong.
+ */
+const backupProfile = (profileDir, name) => {
+  const target = join(backupRoot(), name);
+  try {
+    mkdirSync(target, { recursive: true });
+    for (const file of ['package.json', 'cordis.patch.yml', 'cordis.yml']) {
+      try {
+        writeFileSync(join(target, file), readFileSync(join(profileDir, file)));
+      } catch {
+        // A missing file simply is not part of the backup.
+      }
+    }
+    return target;
+  } catch {
+    return null;
+  }
+};
+
+/** Snapshot of the last configuration that actually started. */
+const snapshotGood = (profileDir) => {
+  try {
+    const target = backupProfile(profileDir, 'last-good');
+    if (target) {
+      writeFileSync(join(backupRoot(), 'last.json'), JSON.stringify({
+        good: target,
+        at: new Date().toISOString(),
+        profileDir,
+      }, null, 2));
+    }
+  } catch {
+    // Snapshotting must never break activation.
+  }
+};
+
+/**
  * Restart the desktop app from an independent process.
  *
  * A child of the app dies with the `taskkill /T` tree it launches, so the
@@ -91,24 +133,99 @@ const runTask = (args) => new Promise((resolve) => {
   child.on('close', (code) => resolve({ code: code ?? -1, stderr }));
 });
 
-const scheduleRestart = async ({ appPid, exe, delayMs = 1500 }) => {
+const scheduleRestart = async ({ appPid, exe, profileDir, watchdogEnabled = true, watchdogSeconds = 10, delayMs = 1200 }) => {
   mkdirSync(dataDir(), { recursive: true });
   const helperPath = join(dataDir(), 'restart-helper.ps1');
   const logPath = join(dataDir(), 'restart.log');
   const taskName = 'HSB-Restart';
+  const boot = bootPath();
+  const failed = failedPath();
+  // History copy of the current (possibly broken) files.
+  backupProfile(profileDir, new Date().toISOString().replace(/[:.]/g, '-'));
+  const good = join(backupRoot(), 'last-good');
+  const backup = existsSync(good) ? good : null;
+  const startedAt = new Date().toISOString();
+  const timeoutSec = Math.min(120, Math.max(1, Number(watchdogSeconds) || 10));
 
+  const quote = (value) => String(value).replace(/'/g, "''");
   const helper = [
     "$ErrorActionPreference = 'Continue'",
-    `Add-Content -LiteralPath '${logPath}' -Value ('helper start ' + (Get-Date -Format o))`,
+    `$log = '${quote(logPath)}'`,
+    `$boot = '${quote(boot)}'`,
+    `$failed = '${quote(failed)}'`,
+    `$backup = '${quote(backup ?? '')}'`,
+    `$profile = '${quote(profileDir)}'`,
+    `$exe = '${quote(exe)}'`,
+    `$startedAt = [datetime]'${startedAt}'`,
+    "function Log($m) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $m) }",
+    "function FreshBoot($since) {",
+    "  if (-not (Test-Path $boot)) { return $false }",
+    "  try { $b = Get-Content -LiteralPath $boot -Raw | ConvertFrom-Json; return ([datetime]$b.at -gt $since) } catch { return $false }",
+    "}",
+    "function Wait-Healthy($since) {",
+    `  $deadline = (Get-Date).AddSeconds(${timeoutSec})`,
+    "  while ((Get-Date) -lt $deadline) {",
+    "    if (FreshBoot $since) { return $true }",
+    "    Start-Sleep -Seconds 3",
+    "  }",
+    "  return $false",
+    "}",
+    "function Kill-App { & \"$env:SystemRoot\\System32\\taskkill.exe\" /IM 'DeepSeek Harness.exe' /T /F *>> $log }",
+    "Log 'watchdog start'",
     `Start-Sleep -Milliseconds ${delayMs}`,
-    `& "$env:SystemRoot\\System32\\taskkill.exe" /PID ${appPid} /T /F *>> '${logPath}'`,
-    `Add-Content -LiteralPath '${logPath}' -Value ('killed ' + (Get-Date -Format o))`,
-    'Start-Sleep -Milliseconds 1800',
-    `Start-Process -FilePath '${exe.replace(/'/g, "''")}'`,
-    `Add-Content -LiteralPath '${logPath}' -Value ('started ' + (Get-Date -Format o))`,
-    `& "$env:SystemRoot\\System32\\schtasks.exe" /Delete /TN '${taskName}' /F *>> '${logPath}'`,
+    `& "$env:SystemRoot\\System32\\taskkill.exe" /PID ${appPid} /T /F *>> $log`,
+    "Log 'killed'",
+    "Start-Sleep -Milliseconds 1500",
+    "Start-Process -FilePath $exe",
+    "Log 'started'",
+    "if (Wait-Healthy $startedAt) { Log 'healthy'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
+    "Log 'timeout: rolling back the profile backup'",
+    "if ($backup -ne '' -and (Test-Path $backup)) { Copy-Item -Path (Join-Path $backup '*') -Destination $profile -Force -Recurse -ErrorAction SilentlyContinue }",
+    "Set-Content -LiteralPath $failed -Value (ConvertTo-Json @{ failed = $true; at = (Get-Date).ToString('o') }) -Encoding UTF8",
+    "Kill-App",
+    "Start-Sleep -Milliseconds 2000",
+    "$rollbackAt = Get-Date",
+    "Start-Process -FilePath $exe",
+    "Log 'restarted after rollback'",
+    "if (Wait-Healthy $rollbackAt) { Log 'healthy after rollback'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
+    "Log 'still failing: disabling the third-party restart bundle'",
+    "$pkgPath = Join-Path $profile 'package.json'",
+    "try {",
+    "  $pkg = Get-Content -LiteralPath $pkgPath -Raw | ConvertFrom-Json",
+    "  $pkg.dsh.profile.bundles = @($pkg.dsh.profile.bundles | Where-Object { $_ -ne 'hsb-restart' })",
+    "  ($pkg | ConvertTo-Json -Depth 12) | Set-Content -LiteralPath $pkgPath -Encoding UTF8",
+    "  Log 'hsb-restart bundle removed from the profile'",
+    "} catch { Log ('disable failed: ' + $_) }",
+    "Kill-App",
+    "Start-Sleep -Milliseconds 2000",
+    "Start-Process -FilePath $exe",
+    "Log 'started without the plugin'",
+    "& \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log",
   ].join('\r\n');
   writeFileSync(helperPath, helper);
+
+  if (process.platform === 'win32' && watchdogEnabled === false) {
+    const plain = [
+      "$ErrorActionPreference = 'Continue'",
+      `$log = '${logPath.replace(/'/g, "''")}'`,
+      "Add-Content -LiteralPath $log -Value ('plain restart ' + (Get-Date -Format o))",
+      `Start-Sleep -Milliseconds ${delayMs}`,
+      `& "$env:SystemRoot\\System32\\taskkill.exe" /PID ${appPid} /T /F *>> $log`,
+      'Start-Sleep -Milliseconds 1500',
+      `Start-Process -FilePath '${exe.replace(/'/g, "''")}'`,
+      "& \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log",
+    ].join('\r\n');
+    writeFileSync(helperPath, plain);
+    const create = await runTask([
+      '/Create', '/F', '/IT', '/TN', taskName, '/TR',
+      `powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "${helperPath}"`,
+      '/SC', 'ONCE', '/ST', '00:00',
+    ]);
+    if (create.code !== 0) throw new Error(`Windows Task Scheduler refused the restart task: ${create.stderr.trim() || create.code}`);
+    const run = await runTask(['/Run', '/TN', taskName]);
+    if (run.code !== 0) throw new Error(`could not start the restart task: ${run.stderr.trim() || run.code}`);
+    return;
+  }
 
   if (process.platform === 'win32') {
     const command = `powershell.exe -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File "${helperPath}"`;
@@ -134,6 +251,36 @@ const scheduleRestart = async ({ appPid, exe, delayMs = 1500 }) => {
 
 export function apply(ctx, config = {}) {
   const port = config.bridgePort ?? 49233;
+
+  // The profile patch is the deployment default; the form writes overrides.
+  const settingsStore = createSettingsStore(dataDir());
+  const effective = () => settingsStore.merge({
+    toolEnabled: config.toolEnabled !== false,
+    watchdogEnabled: config.watchdogEnabled !== false,
+    watchdogSeconds: Number.isFinite(config.watchdogSeconds) ? Number(config.watchdogSeconds) : 10,
+  });
+
+  const profileDir = (() => {
+    try {
+      const context = ctx.get?.('profileContext');
+      const dir = context?.dir ?? context?.directory ?? context?.path ?? context?.profileDir;
+      if (typeof dir === 'string' && dir.length > 0) return dir;
+    } catch {
+      // Fall through to the conventional location.
+    }
+    return join(homedir(), '.dsh', 'profiles', process.env.DSH_PROFILE ?? 'desktop');
+  })();
+
+  // Last configuration that booted successfully: the rollback target.
+  snapshotGood(profileDir);
+
+  // Proof of a healthy boot for the restart watchdog.
+  try {
+    mkdirSync(dataDir(), { recursive: true });
+    writeFileSync(bootPath(), JSON.stringify({ at: new Date().toISOString(), pid: process.pid }));
+  } catch {
+    // The marker is only used by the watchdog.
+  }
 
   // DSH drops a job record when the Agent that started it is disposed, while
   // the job keeps running. Remember every started job ourselves so a finished
@@ -188,33 +335,6 @@ export function apply(ctx, config = {}) {
     }
   }
 
-  /**
-   * Fallback for jobs whose registry record is gone: DSH runs background work as
-   * shell children of this Host process, so a live child shell means a live job.
-   */
-  const childShells = () => {
-    if (process.platform !== 'win32') return [];
-    const query = [
-      'Get-CimInstance Win32_Process -Filter "Name=\'powershell.exe\' OR Name=\'pwsh.exe\' OR Name=\'cmd.exe\'"',
-      `| Where-Object { $_.ParentProcessId -eq ${process.pid} }`,
-      '| Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress',
-    ].join(' ');
-    try {
-      const raw = execFileSync('powershell.exe', ['-NoProfile', '-Command', query], {
-        encoding: 'utf8',
-        timeout: 5000,
-        windowsHide: true,
-      }).trim();
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      const rows = Array.isArray(parsed) ? parsed : [parsed];
-      // Ignore the inspector itself.
-      return rows.filter((row) => !String(row?.CommandLine ?? '').includes('Get-CimInstance'));
-    } catch {
-      return [];
-    }
-  };
-
   const trackedRunning = () => {
     const running = [];
     for (const [id, record] of trackedJobs) {
@@ -243,7 +363,7 @@ export function apply(ctx, config = {}) {
     };
     writeMarker(marker);
     try {
-      await scheduleRestart({ appPid, exe });
+      await scheduleRestart({ appPid, exe, profileDir, ...effective() });
     } catch (error) {
       clearMarker();
       throw error;
@@ -275,11 +395,47 @@ export function apply(ctx, config = {}) {
       res.end(payload);
     };
 
+    if (req.method === 'GET' && url.pathname === '/settings') {
+      send(200, {
+        values: effective(),
+        defaults: {
+          toolEnabled: config.toolEnabled !== false,
+          watchdogEnabled: config.watchdogEnabled !== false,
+          watchdogSeconds: Number.isFinite(config.watchdogSeconds) ? Number(config.watchdogSeconds) : 10,
+        },
+        file: settingsStore.file,
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/settings') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; if (body.length > 8192) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          settingsStore.write(parsed);
+          syncTool();
+          send(200, { ok: true, values: effective() });
+        } catch (error) {
+          send(400, { ok: false, error: String(error.message ?? error) });
+        }
+      });
+      return;
+    }
+
     if (req.method === 'GET' && url.pathname === '/claim') {
       // Atomic: only one page load may consume the restart marker, so a double
       // boot cannot post the auto message twice.
       const marker = readMarker();
       if (marker) clearMarker();
+      let failed = false;
+      try {
+        failed = existsSync(failedPath());
+        if (failed) rmSync(failedPath(), { force: true });
+      } catch {
+        failed = false;
+      }
       let queued = false;
       if (marker?.sessionId) {
         try {
@@ -290,7 +446,7 @@ export function apply(ctx, config = {}) {
           queued = false;
         }
       }
-      send(200, { marker, queued });
+      send(200, { marker, queued, failed });
       return;
     }
 
@@ -434,11 +590,25 @@ export function apply(ctx, config = {}) {
     },
   });
 
-  ctx.tools.register({
+  // The settings form can hide the tool; attempts to call it then fail with a
+  // clear error because the registration is gone.
+  let disposeRestart = null;
+  const syncTool = () => {
+    const enabled = effective().toolEnabled !== false;
+    if (enabled && disposeRestart === null) {
+      const dispose = registerRestartTool();
+      disposeRestart = typeof dispose === 'function' ? dispose : null;
+    } else if (!enabled && disposeRestart) {
+      disposeRestart();
+      disposeRestart = null;
+    }
+  };
+
+  const registerRestartTool = () => ctx.tools.register({
     name: 'hsb_restart',
     description:
       'Restart the DeepSeek Harness desktop app. Use it after changing plugin code or profile configuration that only takes effect on a fresh start. '
-      + 'Set continue to true to reopen this session and send "continue" after the restart, so the work resumes without a manual message.',
+      + 'The session is reopened afterwards and the message [auto.continue] is posted so the work resumes.',
     parameters: obj({
       fake: {
         type: 'boolean',
@@ -520,15 +690,6 @@ export function apply(ctx, config = {}) {
       } catch {
         // Tracking is best effort.
       }
-      if (running.length === 0) {
-        try {
-          for (const child of childShells()) {
-            collect({ id: String(child.ProcessId), status: 'running', label: String(child.CommandLine ?? '') });
-          }
-        } catch {
-          // Process inspection is best effort too.
-        }
-      }
       try {
         const ids = new Set();
         for (const other of live) {
@@ -568,5 +729,7 @@ export function apply(ctx, config = {}) {
       };
     },
   });
+
+  syncTool();
 
 }
