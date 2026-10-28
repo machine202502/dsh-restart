@@ -1,4 +1,4 @@
-# hsb-restart
+# dsh-restart
 
 Перезапуск DeepSeek Harness из интерфейса или инструментом агента — с возможностью
 продолжить ту же сессию после старта.
@@ -10,7 +10,7 @@
 | Кнопка «Перезапустить» | футер сайдбара, рядом с аккаунтом (иконка питания) |
 | Та же кнопка у поля ввода | `conversation.input.dock` |
 | Подтверждение | модалка с двумя кнопками, без лишних опций |
-| Инструмент агента | `hsb_restart({ fake })` |
+| Инструмент агента | `dsh_restart({ fake })` |
 | Продолжение сессии | рестарт всегда открывает сессию и пишет `[auto.continue]` |
 
 ## Как работает рестарт
@@ -18,8 +18,8 @@
 Перезапускающий процесс не может быть потомком приложения: `taskkill /T` убивает всё
 дерево вместе с ним. Поэтому плагин:
 
-1. пишет маркер `%LOCALAPPDATA%\hsb-restart\pending.json`;
-2. создаёт одноразовую задачу планировщика `HSB-Restart` (Windows) с helper-скриптом;
+1. пишет маркер `%LOCALAPPDATA%\dsh-restart\pending.json`;
+2. создаёт одноразовую задачу планировщика `DSH-Restart` (Windows) с helper-скриптом;
 3. helper ждёт 1.5 с, закрывает дерево процесса приложения, ждёт 1.8 с, запускает `.exe`
    и удаляет задачу.
 
@@ -47,7 +47,7 @@ POST /restart   → записать маркер и перезапустить
 ## Инструмент
 
 ```text
-hsb_restart { fake: true }
+dsh_restart { fake: true }
 → Preflight passed; fake restart requested, nothing was restarted.
 ```
 
@@ -61,23 +61,23 @@ hsb_restart { fake: true }
 
 | Настройка | По умолчанию | Что делает |
 |---|---|---|
-| Команда `hsb_restart` доступна агенту | включено | при выключении инструмент исчезает; вызов из старой памяти падает с `unknown tool "hsb_restart"` |
+| Команда `dsh_restart` доступна агенту | включено | при выключении инструмент исчезает; вызов из старой памяти падает с `unknown tool "dsh_restart"` |
 | Сторож активен | включено | при выключении рестарт просто закрывает и открывает приложение, без отката профиля |
 | Ожидание сторожа, сек | 10 | сколько ждать признака живого старта перед откатом (1–120) |
 
-Переопределения хранятся в `%LOCALAPPDATA%\hsb-restart\settings.json`; значения из
+Переопределения хранятся в `%LOCALAPPDATA%\dsh-restart\settings.json`; значения из
 `cordis.patch.yml` остаются умолчаниями. Сохранение настроек не требует перезапуска:
 инструмент регистрируется и снимается на лету.
 
 ## Когда инструмент отказывает
 
-`hsb_restart` доступен агенту только в «тихом» режиме — когда перезапуск никому не помешает:
+`dsh_restart` доступен агенту только в «тихом» режиме — когда перезапуск никому не помешает:
 
 | Проверка | Отказ |
 |---|---|
-| Режим доступа не Full access | `hsb_restart requires the Full access permission preset (current: …)` |
-| Другая сессия или подагент ещё работает | `hsb_restart refused: N other session(s) or subagent(s) are still working (…)` |
-| Есть работающая фоновая задача | `hsb_restart refused: N background job(s) are still running (…)` |
+| Режим доступа не Full access | `dsh_restart requires the Full access permission preset (current: …)` |
+| Другая сессия или подагент ещё работает | `dsh_restart refused: N other session(s) or subagent(s) are still working (…)` |
+| Есть работающая фоновая задача | `dsh_restart refused: N background job(s) are still running (…)` |
 
 Проверки идут через `ctx.permissionPresets.current(agent.session)`, `ctx.agents.list()`
 и `ctx.jobs.list(agentId)`; статус «работает» — `running` либо непустая очередь входа агента.
@@ -95,7 +95,7 @@ hsb_restart { fake: true }
 
 ### Кнопка и инструмент ведут себя по-разному
 
-- **`hsb_restart` (агент)** — всегда открывает сессию и пишет `[auto.continue]`
+- **`dsh_restart` (агент)** — всегда открывает сессию и пишет `[auto.continue]`
   (или `[auto.continue.failed]`, если сторож откатил профиль).
 - **Кнопка «Restart DeepSeek Harness» в сайдбаре** — просто перезапускает приложение:
   маркер не создаётся, сессия не продолжается, авто-сообщение не отправляется.
@@ -121,7 +121,7 @@ hsb_restart { fake: true }
 Каждый рестарт получает токен:
 
 ```
-hsb_restart → marker { token, sessionId } + watchdog.json { token }
+dsh_restart → marker { token, sessionId } + watchdog.json { token }
 сторож  → перед откатом сверяет токен в watchdog.json
 старт   → хост удаляет watchdog.json (токен аннулирован)
 ```
@@ -159,16 +159,16 @@ hsb_restart → marker { token, sessionId } + watchdog.json { token }
 ## Установка
 
 ```bash
-npx --yes github:machine202502/hsb-restart
+npx --yes github:machine202502/dsh-restart
 ```
 
 Или вручную:
 
 ```json
-"hsb-restart": "github:machine202502/hsb-restart#main"
+"dsh-restart": "github:machine202502/dsh-restart#main"
 ```
 
-и добавить `hsb-restart` в `dsh.profile.bundles`.
+и добавить `dsh-restart` в `dsh.profile.bundles`.
 
 После установки нужен перезапуск приложения (можно кнопкой, когда она появится).
 

@@ -14,8 +14,8 @@ apply(ctx, { bridgePort: 49399 });
 
 const check = (name, ok, detail = '') => console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? `  — ${detail}` : ''}`);
 
-check('tool registered', tools.has('hsb_restart'), [...tools.keys()].join(', '));
-const schema = tools.get('hsb_restart')?.parameters;
+check('tool registered', tools.has('dsh_restart'), [...tools.keys()].join(', '));
+const schema = tools.get('dsh_restart')?.parameters;
 check('only fake is tunable', Object.keys(schema?.properties ?? {}).join(',') === 'fake', JSON.stringify(schema?.properties ?? {}));
 
 // The bridge starts on the next tick so plugin activation never waits for it.
@@ -32,7 +32,7 @@ const consumed = await fetch(`${base}/consumed`, { method: 'POST', body: '{}' })
 check('consumed endpoint', consumed.ok, String(consumed.status));
 
 // The tool must refuse to restart while anything else is working.
-const tool = tools.get('hsb_restart');
+const tool = tools.get('dsh_restart');
 const self = { id: 's-self', session: {}, status: 'running', inbox: { nextTurn: [], nextStep: [] } };
 
 services.permissionPresets = { current: () => 'auto' };

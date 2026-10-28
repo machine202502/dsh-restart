@@ -1,6 +1,6 @@
 - insert:
     - id: restart
-      name: 'hsb-restart'
+      name: 'dsh-restart'
       config:
         bridgePort: 49233
         toolEnabled: true

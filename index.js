@@ -18,8 +18,8 @@ const obj = (properties = {}, required = []) => ({
 
 /** Where the restart marker lives between the old and the new app process. */
 const dataDir = () => (process.platform === 'win32'
-  ? join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'hsb-restart')
-  : join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'), 'hsb-restart'));
+  ? join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'dsh-restart')
+  : join(process.env.XDG_STATE_HOME ?? join(homedir(), '.local', 'state'), 'dsh-restart'));
 
 const markerPath = () => join(dataDir(), 'pending.json');
 const failedPath = () => join(dataDir(), 'failed.json');
@@ -152,7 +152,7 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
   mkdirSync(dataDir(), { recursive: true });
   const helperPath = join(dataDir(), 'restart-helper.ps1');
   const logPath = join(dataDir(), 'restart.log');
-  const taskName = 'HSB-Restart';
+  const taskName = 'DSH-Restart';
   const boot = bootPath();
   const failed = failedPath();
   // History copy of the current (possibly broken) files.
@@ -228,15 +228,15 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
     "Purge-Cookies",
     "Start-Process -FilePath $exe",
     "Log 'started'",
-    "if (Wait-Healthy $startedAt) { Log 'healthy'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
+    "if (Wait-Healthy $startedAt) { Log 'healthy'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F *>> $log; exit 0 }",
     "if (AuthFailureSince $startedAt) {",
     "  Log 'auth failure detected: purged stale cookies, retrying the start'",
     "  Purge-Cookies",
     "  Start-Process -FilePath $exe",
-    "  if (Wait-Healthy $startedAt) { Log 'healthy after cookie purge'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
+    "  if (Wait-Healthy $startedAt) { Log 'healthy after cookie purge'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F *>> $log; exit 0 }",
     "  Log 'still failing after the cookie purge'",
     "}",
-    "if (-not (HashesMatch)) { Log 'token invalidated or files changed manually: skipping the rollback'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
+    "if (-not (HashesMatch)) { Log 'token invalidated or files changed manually: skipping the rollback'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F *>> $log; exit 0 }",
     "Log 'timeout: rolling back the profile backup'",
     "if ($backup -ne '' -and (Test-Path $backup)) { Copy-Item -Path (Join-Path $backup '*') -Destination $profile -Force -Recurse -ErrorAction SilentlyContinue }",
     "$payload = ConvertTo-Json @{ failed = $true; at = (Get-Date).ToString('o') }",
@@ -246,21 +246,21 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
     "$rollbackAt = Get-Date",
     "Start-Process -FilePath $exe",
     "Log 'restarted after rollback'",
-    "if (Wait-Healthy $rollbackAt) { Log 'healthy after rollback'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log; exit 0 }",
+    "if (Wait-Healthy $rollbackAt) { Log 'healthy after rollback'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F *>> $log; exit 0 }",
     "Log 'still failing: disabling the third-party restart bundle'",
     "$pkgPath = Join-Path $profile 'package.json'",
     "try {",
     "  $pkg = Get-Content -LiteralPath $pkgPath -Raw | ConvertFrom-Json",
-    "  $pkg.dsh.profile.bundles = @($pkg.dsh.profile.bundles | Where-Object { $_ -ne 'hsb-restart' })",
+    "  $pkg.dsh.profile.bundles = @($pkg.dsh.profile.bundles | Where-Object { $_ -ne 'dsh-restart' })",
     "  $json = $pkg | ConvertTo-Json -Depth 12",
     "  [System.IO.File]::WriteAllText($pkgPath, $json, (New-Object System.Text.UTF8Encoding($false)))",
-    "  Log 'hsb-restart bundle removed from the profile'",
+    "  Log 'dsh-restart bundle removed from the profile'",
     "} catch { Log ('disable failed: ' + $_) }",
     "Kill-App",
     "Start-Sleep -Milliseconds 2000",
     "Start-Process -FilePath $exe",
     "Log 'started without the plugin'",
-    "& \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log",
+    "& \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F *>> $log",
   ].join('\r\n');
   writeFileSync(helperPath, helper);
 
@@ -277,7 +277,7 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
       `$scripts = '${cookieScript.replace(/'/g, "''")}'`,
       "if ($python -and (Test-Path -LiteralPath $scripts)) { & $python $scripts 2>&1 | ForEach-Object { Add-Content -LiteralPath $log -Value ([string]$_) } }",
       `Start-Process -FilePath '${exe.replace(/'/g, "''")}'`,
-      "& \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'HSB-Restart' /F *>> $log",
+      "& \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F *>> $log",
     ].join('\r\n');
     writeFileSync(helperPath, plain);
     const create = await runTask([
@@ -354,7 +354,7 @@ export function apply(ctx, config = {}) {
   const trackedJobs = new Map();
   let jobsService;
   const installTracking = () => {
-    if (!jobsService || typeof jobsService.start !== 'function' || jobsService.__hsbRestartTracked === true) return;
+    if (!jobsService || typeof jobsService.start !== 'function' || jobsService.__dshRestartTracked === true) return;
     const originalStart = jobsService.start.bind(jobsService);
     jobsService.start = (spec, ...rest) => {
       const jobId = originalStart(spec, ...rest);
@@ -366,7 +366,7 @@ export function apply(ctx, config = {}) {
       }
       return jobId;
     };
-    jobsService.__hsbRestartTracked = true;
+    jobsService.__dshRestartTracked = true;
   };
   try {
     jobsService = ctx.get?.('jobs');
@@ -610,11 +610,11 @@ export function apply(ctx, config = {}) {
     try {
       server.on('error', (error) => {
         listening = false;
-        ctx.logger?.warn?.(`hsb-restart: bridge unavailable: ${error.message}`);
+        ctx.logger?.warn?.(`dsh-restart: bridge unavailable: ${error.message}`);
       });
       server.listen(port, '127.0.0.1', () => { listening = true; });
     } catch (error) {
-      ctx.logger?.warn?.(`hsb-restart: bridge failed: ${error.message}`);
+      ctx.logger?.warn?.(`dsh-restart: bridge failed: ${error.message}`);
     }
   };
   setImmediate(startBridge);
@@ -628,8 +628,8 @@ export function apply(ctx, config = {}) {
   });
 
   ctx.tools.register({
-    name: 'hsb_restart_status',
-    description: 'Report what hsb_restart checks: permission preset, live sessions, and background jobs.',
+    name: 'dsh_restart_status',
+    description: 'Report what dsh_restart checks: permission preset, live sessions, and background jobs.',
     parameters: obj({}),
     output: {
       schema: obj({ report: { type: 'string' } }, ['report']),
@@ -686,7 +686,7 @@ export function apply(ctx, config = {}) {
   };
 
   const registerRestartTool = () => ctx.tools.register({
-    name: 'hsb_restart',
+    name: 'dsh_restart',
     description:
       'Restart the DeepSeek Harness desktop app. Use it after changing plugin code or profile configuration that only takes effect on a fresh start. '
       + 'The session is reopened afterwards and the message [auto.continue] is posted so the work resumes.',
@@ -720,7 +720,7 @@ export function apply(ctx, config = {}) {
       const preset = presets?.current?.(agent?.session);
       if (preset !== undefined && preset !== 'danger-full-access') {
         throw new Error(
-          `hsb_restart requires the Full access permission preset (current: ${String(preset)}). `
+          `dsh_restart requires the Full access permission preset (current: ${String(preset)}). `
           + 'Switch to Full access, or restart the app manually.',
         );
       }
@@ -742,7 +742,7 @@ export function apply(ctx, config = {}) {
       });
       if (busy.length > 0) {
         throw new Error(
-          `hsb_restart refused: ${busy.length} other session(s) or subagent(s) are still working `
+          `dsh_restart refused: ${busy.length} other session(s) or subagent(s) are still working `
           + `(${busy.map((other) => other.id).join(', ')}). Wait for them to finish.`,
         );
       }
@@ -787,7 +787,7 @@ export function apply(ctx, config = {}) {
       }
       if (running.length > 0) {
         throw new Error(
-          `hsb_restart refused: ${running.length} background job(s) are still running `
+          `dsh_restart refused: ${running.length} background job(s) are still running `
           + `(${running.map((job) => job.id ?? 'job').join(', ')}). Wait for them to finish.`,
         );
       }

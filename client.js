@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: 'hsb-restart',
+  id: 'dsh-restart',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
@@ -17,7 +17,7 @@ window.__ModuleLoader__.load({
         tooltip: 'Restart DeepSeek Harness',
         rowLabel: 'Restart DeepSeek Harness',
         failed: 'Could not restart',
-        toolEnabled: 'hsb_restart is available to agents',
+        toolEnabled: 'dsh_restart is available to agents',
         toolEnabledHint: 'when off, the tool disappears and calls fail',
         watchdog: 'Watchdog is active',
         watchdogHint: 'rolls the profile back when the app does not return',
@@ -39,7 +39,7 @@ window.__ModuleLoader__.load({
         tooltip: 'Перезапустить DeepSeek Harness',
         rowLabel: 'Перезапустить DeepSeek Harness',
         failed: 'Не удалось перезапустить',
-        toolEnabled: 'Команда hsb_restart доступна агенту',
+        toolEnabled: 'Команда dsh_restart доступна агенту',
         toolEnabledHint: 'если выключить — инструмент исчезнет, вызовы будут падать',
         watchdog: 'Сторож активен',
         watchdogHint: 'откатывает профиль, если приложение не поднялось',
@@ -65,9 +65,9 @@ window.__ModuleLoader__.load({
 
     const ensureStyles = () => {
       if (typeof document === 'undefined') return;
-      if (document.querySelector('style[data-plugin="hsb-restart"]') !== null) return;
+      if (document.querySelector('style[data-plugin="dsh-restart"]') !== null) return;
       const tag = document.createElement('style');
-      tag.dataset.plugin = 'hsb-restart';
+      tag.dataset.plugin = 'dsh-restart';
       tag.textContent = `
 /* Mirrors the account row below it: 260x44, 6px padding, 8px gap, 12px radius,
    14px label, 24px avatar circle. */
@@ -190,7 +190,7 @@ window.__ModuleLoader__.load({
 
     const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    const DRAFT_KEY = 'hsb-restart:draft';
+    const DRAFT_KEY = 'dsh-restart:draft';
 
     const saveDraft = (text) => {
       try { window.localStorage.setItem(DRAFT_KEY, text); } catch { /* storage off */ }
@@ -354,7 +354,7 @@ window.__ModuleLoader__.load({
         restart.textContent = strings.restarting;
         error.hidden = true;
         if (sessionId) {
-          try { window.localStorage.setItem('hsb-restart:session', sessionId); } catch { /* storage off */ }
+          try { window.localStorage.setItem('dsh-restart:session', sessionId); } catch { /* storage off */ }
         }
         try {
           // The restart always reopens this session and posts "continue".
@@ -416,7 +416,7 @@ window.__ModuleLoader__.load({
     }
 
     const lastSessionId = () => {
-      try { return window.localStorage.getItem('hsb-restart:session') ?? null; } catch { return null; }
+      try { return window.localStorage.getItem('dsh-restart:session') ?? null; } catch { return null; }
     };
 
     /** After a restart with "continue", reopen the session and submit the text. */
@@ -568,10 +568,10 @@ window.__ModuleLoader__.load({
         try {
           ctx.slots.inject('plugins.row.config', () => ctx.slots.register({
             name: 'plugins.row.config',
-            key: 'hsb-restart#restart',
+            key: 'dsh-restart#restart',
           }, SettingsForm));
         } catch (error) {
-          console.warn('hsb-restart: settings slot failed', error);
+          console.warn('dsh-restart: settings slot failed', error);
         }
         try {
           ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
@@ -582,7 +582,7 @@ window.__ModuleLoader__.load({
             inject: (sessionId, t) => ({ sessionId, t }),
           }, RestartButton));
         } catch (error) {
-          console.warn('hsb-restart: footer slot failed', error);
+          console.warn('dsh-restart: footer slot failed', error);
         }
         diag('applied', { hasEffect: typeof ctx.effect, hasWorkspace: typeof ctx.uiWorkspace });
         // Plain timer: a slot-scoped effect can be disposed before it fires, and
