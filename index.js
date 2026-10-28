@@ -688,11 +688,9 @@ export function apply(ctx, config = {}) {
   const registerRestartTool = () => ctx.tools.register({
     name: 'dsh_restart',
     description:
-      'Restart the DeepSeek Harness desktop app so plugin or profile changes take effect. '
-      + 'Use it ONLY while developing or debugging DSH itself (plugin code, cordis.patch, profile config) and the user expects a restart; '
-      + 'never for ordinary work, never to refresh state, and never without a code or profile change that needs a fresh process. '
-      + 'A restart closes the app and kills running jobs and in-flight work; the session is reopened and [auto.continue] is posted so the work resumes. '
-      + 'If unsure, preflight with { fake: true } or read dsh_restart_status first.',
+      'Restart the DeepSeek Harness app so plugin or profile changes take effect. '
+      + 'Use it only while developing DSH extensions and the user expects a restart — not for ordinary work, not just to refresh state. '
+      + 'It kills running jobs and reopens the session with [auto.continue]; preflight with { fake: true } or dsh_restart_status when unsure.',
     parameters: obj({
       fake: {
         type: 'boolean',
@@ -709,6 +707,10 @@ export function apply(ctx, config = {}) {
     },
     isConcurrencySafe: () => false,
     execute: async (args, exec) => {
+      const depth = exec?.agent?.options?.subagentDepth;
+      if (exec?.parent !== undefined || (typeof depth === 'number' && depth > 0)) {
+        throw new Error('dsh_restart is only available to the main agent: a subagent cannot restart the app');
+      }
       const agent = exec?.agent;
       const service = (name) => {
         try {
