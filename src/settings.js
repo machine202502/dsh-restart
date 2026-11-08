@@ -7,7 +7,10 @@ import { join } from 'node:path';
  * The profile patch stays the deployment default; this file holds what the
  * settings form saves, so a form write never edits cordis.patch.yml by hand.
  */
+export const LANGUAGES = ['ru', 'en', 'zh', 'auto'];
+
 const KEYS = {
+  language: 'language',
   toolEnabled: 'boolean',
   watchdogEnabled: 'boolean',
   watchdogSeconds: 'number',
@@ -19,6 +22,10 @@ export function sanitizeSettings(input = {}) {
   const out = {};
   for (const [key, kind] of Object.entries(KEYS)) {
     const value = input?.[key];
+    if (kind === 'language') {
+      if (LANGUAGES.includes(value)) out[key] = value;
+      continue;
+    }
     if (kind === 'boolean') {
       if (typeof value === 'boolean') out[key] = value;
       continue;

@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "title": "重启",
+    "description": "一键重新启动 DeepSeek Harness，并在重启后继续当前会话。"
+  },
+  "dialog": {
+    "title": "重新启动 DeepSeek Harness？",
+    "cancel": "取消",
+    "restart": "重新启动",
+    "restarting": "正在重新启动…",
+    "tooltip": "重新启动 DeepSeek Harness",
+    "row": "重新启动 DeepSeek Harness",
+    "failed": "无法重新启动"
+  }
+}

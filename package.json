@@ -13,7 +13,8 @@
     ".": "./index.js",
     "./client": "./client.js",
     "./locale/*.json": "./locale/*.json",
-    "./icon": "./icon.svg"
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
   },
   "files": [
     "index.js",
@@ -23,7 +24,8 @@
     "icon.svg",
     "README.md",
     "src/*.js",
-    "src/*.py"
+    "src/*.py",
+    "README.ru.md"
   ],
   "dsh": {
     "bundle": {
@@ -36,5 +38,6 @@
         "@deepseek-ai/dsh-client-ui-conversation"
       ]
     }
-  }
+  },
+  "icon": "./icon.svg"
 }

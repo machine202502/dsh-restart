@@ -4,7 +4,7 @@ import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createSettingsStore } from './src/settings.js';
+import { createSettingsStore, LANGUAGES } from './src/settings.js';
 
 export const inject = ['tools'];
 
@@ -319,6 +319,7 @@ export function apply(ctx, config = {}) {
   // The profile patch is the deployment default; the form writes overrides.
   const settingsStore = createSettingsStore(dataDir());
   const effective = () => settingsStore.merge({
+    language: 'ru',
     toolEnabled: config.toolEnabled !== false,
     watchdogEnabled: config.watchdogEnabled !== false,
     watchdogSeconds: Number.isFinite(config.watchdogSeconds) ? Number(config.watchdogSeconds) : 10,
@@ -480,10 +481,12 @@ export function apply(ctx, config = {}) {
       send(200, {
         values: effective(),
         defaults: {
+          language: 'ru',
           toolEnabled: config.toolEnabled !== false,
           watchdogEnabled: config.watchdogEnabled !== false,
           watchdogSeconds: Number.isFinite(config.watchdogSeconds) ? Number(config.watchdogSeconds) : 10,
         },
+        options: LANGUAGES,
         file: settingsStore.file,
       });
       return;

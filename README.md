@@ -1,196 +1,217 @@
 # dsh-restart
 
-Перезапуск DeepSeek Harness из интерфейса или инструментом агента — с возможностью
-продолжить ту же сессию после старта.
+Restart DeepSeek Harness from the interface or with an agent tool — with the option to
+continue the same session after the start.
 
-## Что делает
+## What it does
 
-| Возможность | Где |
+| Capability | Where |
 |---|---|
-| Кнопка «Перезапустить» | футер сайдбара, рядом с аккаунтом (иконка питания) |
-| Подтверждение | модалка с двумя кнопками, без лишних опций |
-| Инструмент агента | `dsh_restart({ fake })` — только для разработки расширений |
-| Продолжение сессии | рестарт инструментом открывает сессию и пишет `[auto.continue]` |
+| "Restart" button | sidebar footer, next to the account (power icon) |
+| Confirmation | a modal with two buttons, no extra options |
+| Agent tool | `dsh_restart({ fake })` — for extension development only |
+| Session continuation | a restart via the tool opens the session and writes `[auto.continue]` |
 
-## Как работает рестарт
+## How the restart works
 
-Перезапускающий процесс не может быть потомком приложения: `taskkill /T` убивает всё
-дерево вместе с ним. Поэтому плагин:
+The restarting process cannot be a child of the application: `taskkill /T` kills the whole
+tree together with it. So the plugin:
 
-1. пишет маркер `%LOCALAPPDATA%\dsh-restart\pending.json`;
-2. создаёт одноразовую задачу планировщика `DSH-Restart` (Windows) с helper-скриптом;
-3. helper ждёт 1.5 с, закрывает дерево процесса приложения, ждёт 1.8 с, запускает `.exe`
-   и удаляет задачу.
+1. writes the marker `%LOCALAPPDATA%\dsh-restart\pending.json`;
+2. creates a one-shot scheduler task `DSH-Restart` (Windows) with a helper script;
+3. the helper waits 1.5 s, closes the application's process tree, waits 1.8 s, launches the
+   `.exe` and deletes the task.
 
-На macOS/Linux используется отдельный `sh`-процесс (`kill` + `open`/запуск).
+On macOS/Linux a separate `sh` process is used (`kill` + `open`/launch).
 
-## Автопродолжение
+## Auto-continue
 
-После старта клиент читает маркер через локальный мост `127.0.0.1:49233`:
+After the start the client reads the marker through the local bridge `127.0.0.1:49233`:
 
 ```
-GET  /claim      → { marker } — атомарно: маркер получает только один клиент
-POST /restart    → записать маркер и перезапустить
-GET  /health     → признак живого хоста для сторожа
-GET  /settings   → текущие переопределения
-POST /settings   → сохранить переопределения (без перезапуска)
+GET  /claim      → { marker } — atomic: only one client receives the marker
+POST /restart    → write the marker and restart
+GET  /health     → a live-host signal for the watchdog
+GET  /settings   → current overrides
+POST /settings   → save overrides (no restart)
 ```
 
-Маркер забирает ровно одна загрузка страницы, поэтому двойная инициализация не даёт
-двух сообщений. Рестарт инструментом возвращает сессию сообщением `[auto.continue]`:
-клиент открывает ту же сессию, дожидается готовности композера, вставляет текст и
-отправляет его кнопкой отправки (Enter — запасной вариант). Кнопка в футере сайдбара
-маркер не создаёт и сессию не продолжает.
+Exactly one page load claims the marker, so double initialization does not produce two
+messages. A restart via the tool returns the session with an `[auto.continue]` message: the
+client opens the same session, waits for the composer to be ready, inserts the text and
+sends it with the send button (Enter is the fallback). The sidebar footer button does not
+create a marker and does not continue the session.
 
-Черновик пользователя не теряется: если в поле уже есть текст, он временно
-откладывается в `localStorage`, отправляется `[auto.continue]`, после чего текст
-возвращается в поле ввода (без отправки). Очередь сообщений — состояние сессии,
-плагин её не читает и не меняет.
+The user's draft is not lost: if the field already contains text, it is temporarily stashed
+in `localStorage`, `[auto.continue]` is sent, and then the text is returned to the input
+field (without being sent). The message queue is session state — the plugin neither reads
+nor changes it.
 
-## Инструмент
+## The tool
 
-Инструмент нужен для разработки и отладки самого DSH: плагин, `cordis.patch.yml`, профиль.
-Он не предназначен для обычной работы, «обновления состояния» или вызовов без изменения
-кода/конфигурации, которое требует свежего процесса.
+The tool exists for developing and debugging DSH itself: a plugin, `cordis.patch.yml`, the
+profile. It is not intended for ordinary work, for "refreshing state", or for calls without
+a code/config change that needs a fresh process.
 
 ```text
 dsh_restart { fake: true }
 → Preflight passed; fake restart requested, nothing was restarted.
 ```
 
-Без `fake` инструмент перезапускает приложение и возвращает сессию сообщением
-`[auto.continue]`. Флаг `fake` прогоняет все проверки, но ничего не перезапускает —
-для тестов. Если инструмент отключён, вызов из старой памяти падает с
+Without `fake` the tool restarts the application and returns the session with an
+`[auto.continue]` message. The `fake` flag runs every check but restarts nothing — for
+tests. If the tool is disabled, a call from old memory fails with
 `unknown tool "dsh_restart"`.
 
-## Настройки плагина
+## Plugin settings
 
-На странице Plugins → Restart → Configure:
+On the Plugins → Restart → Configure page:
 
-| Настройка | По умолчанию | Что делает |
+| Setting | Default | What it does |
 |---|---|---|
-| Команда `dsh_restart` доступна агенту | включено | при выключении инструмент исчезает; вызов из старой памяти падает с `unknown tool "dsh_restart"` |
-| Сторож активен | включено | при выключении рестарт просто закрывает и открывает приложение, без отката профиля |
-| Ожидание сторожа, сек | 10 | сколько ждать признака живого старта перед откатом (1–120) |
+| Language | Russian | language of the button and the form: Russian, English, Chinese, or "Auto" (follows the application language) |
+| The `dsh_restart` command is available to the agent | enabled | when disabled the tool disappears; a call from old memory fails with `unknown tool "dsh_restart"` |
+| Watchdog active | enabled | when disabled a restart just closes and opens the application, with no profile rollback |
+| Watchdog wait, sec | 10 | how long to wait for a live-start signal before rolling back (1–120) |
 
-Переопределения хранятся в `%LOCALAPPDATA%\dsh-restart\settings.json`; значения из
-`cordis.patch.yml` остаются умолчаниями. Сохранение настроек не требует перезапуска:
-инструмент регистрируется и снимается на лету.
+Overrides are stored in `%LOCALAPPDATA%\dsh-restart\settings.json`; the values from
+`cordis.patch.yml` remain the defaults. Saving settings needs no restart: the tool is
+registered and unregistered on the fly, and the interface language is applied immediately.
 
-## Когда инструмент отказывает
+## Languages
 
-`dsh_restart` доступен агенту только в «тихом» режиме — когда перезапуск никому не помешает:
+Interface languages: **Russian, English, Chinese**.
 
-| Проверка | Отказ |
+- The language comes from the extension setting `language` when it is `ru` / `en` / `zh`.
+- `auto` follows the application language: `document.documentElement.lang` first, then
+  `navigator.language`; `ru*` → `ru`, `zh*` → `zh`, otherwise `en`.
+- The default is `ru`.
+- It is changed in the settings form: Plugins → Restart → Configure.
+- Overrides are stored in `%LOCALAPPDATA%\dsh-restart\settings.json`.
+
+## When the tool refuses
+
+`dsh_restart` is available to the agent only in "quiet" mode — when a restart will not
+disturb anyone:
+
+| Check | Refusal |
 |---|---|
-| Вызов из подагента | `dsh_restart is only available to the main agent: a subagent cannot restart the app; do not retry, report the need to the parent agent instead` |
-| Режим доступа не Full access | `dsh_restart requires the Full access permission preset (current: …)` |
-| Другая сессия или подагент ещё работает | `dsh_restart refused: N other session(s) or subagent(s) are still working (…)` |
-| Есть работающая фоновая задача | `dsh_restart refused: N background job(s) are still running (…)` |
+| Call from a subagent | `dsh_restart is only available to the main agent: a subagent cannot restart the app; do not retry, report the need to the parent agent instead` |
+| Access mode is not Full access | `dsh_restart requires the Full access permission preset (current: …)` |
+| Another session or subagent is still working | `dsh_restart refused: N other session(s) or subagent(s) are still working (…)` |
+| A background job is still running | `dsh_restart refused: N background job(s) are still running (…)` |
 
-Проверки идут через `ctx.permissionPresets.current(agent.session)`, `ctx.agents.list()`
-и `ctx.jobs.list(agentId)`; статус «работает» — `running` либо непустая очередь входа агента.
-Признак подагента — `exec.agent.options.subagentDepth` (плюс `exec.parent`).
+The checks go through `ctx.permissionPresets.current(agent.session)`, `ctx.agents.list()`
+and `ctx.jobs.list(agentId)`; a "working" status is `running` or a non-empty agent input
+queue. A subagent is detected by `exec.agent.options.subagentDepth` (plus `exec.parent`).
 
-Кнопка в интерфейсе эти проверки не выполняет: пользователь сам решает, когда перезапускать.
+The button in the interface performs none of these checks: the user decides when to restart.
 
-## Ограничения
+## Limitations
 
-- пункт в **трее** и в нативном меню **Application** плагином добавить нельзя:
-  трей и меню живут в процессе Electron main, а плагин — в дочернем host-процессе;
-- перезапуск выполняется через Планировщик задач Windows; если политика запрещает
-  создание задач, рестарт не сработает;
-- воркспейс-сессии, которые в этот момент выполняют ход, будут прерваны (как и
-  предупреждает модалка).
+- a **tray** item and an entry in the native **Application** menu cannot be added by the
+  plugin: the tray and the menu live in the Electron main process, while the plugin lives
+  in a child host process;
+- the restart is performed through the Windows Task Scheduler; if policy forbids creating
+  tasks, the restart will not work;
+- workspace sessions that are executing a turn at that moment will be interrupted (as the
+  modal warns).
 
-### Кнопка и инструмент ведут себя по-разному
+### The button and the tool behave differently
 
-- **`dsh_restart` (агент)** — всегда открывает сессию и пишет `[auto.continue]`
-  (или `[auto.continue.failed]`, если сторож откатил профиль).
-- **Кнопка «Restart DeepSeek Harness» в сайдбаре** — просто перезапускает приложение:
-  маркер не создаётся, сессия не продолжается, авто-сообщение не отправляется.
+- **`dsh_restart` (agent)** — always opens the session and writes `[auto.continue]`
+  (or `[auto.continue.failed]` if the watchdog rolled the profile back).
+- **The "Restart DeepSeek Harness" button in the sidebar** — simply restarts the
+  application: no marker is created, the session is not continued, no auto-message is sent.
 
-### Куки и «Web authentication failed»
+### Cookies and "Web authentication failed"
 
-Каждый запуск Desktop Host занимает новый порт и ставит куку `dsh-auth-<random>`
-для `127.0.0.1`. Chromium хранит куки по хосту, а не по порту, поэтому старые куки
-не заменяются и копятся. Замерено на живой установке: около 122 таких куки дают
-заголовок `Cookie` примерно на 17.5 КБ, он перестаёт влезать в лимит (16 КБ),
-приветственный запрос получает `431`, и приложение падает с
-`desktop welcome: Web authentication failed`. Дополнительно срок жизни этих куки
-ограничен в профиле: `connection.cookieMaxAgeDays: 7`.
+Every launch of Desktop Host takes a new port and sets a `dsh-auth-<random>` cookie for
+`127.0.0.1`. Chromium stores cookies per host, not per port, so old cookies are not replaced
+and accumulate. Measured on a live installation: about 122 such cookies produce a `Cookie`
+header of roughly 17.5 KB, it stops fitting into the limit (16 KB), the welcome request
+receives `431`, and the application fails with
+`desktop welcome: Web authentication failed`. In addition, the lifetime of these cookies is
+capped in the profile: `connection.cookieMaxAgeDays: 7`.
 
-Перед каждым запуском (после убийства приложения, до `Start-Process`) helper
-запускает `src/cookie-clean.py` и удаляет только строки `dsh-auth-*` для
-`127.0.0.1`/`localhost`. Остальные куки не трогаются.
+Before every launch (after the application is killed, before `Start-Process`) the helper
+runs `src/cookie-clean.py` and deletes only the `dsh-auth-*` lines for
+`127.0.0.1`/`localhost`. Other cookies are left alone.
 
-Если приложение всё же упало именно на приветствии (лог падения содержит
-`Web authentication failed`), сторож не откатывает профиль и не отключает
-плагины: он чистит куки, запускает приложение ещё раз и ждёт здорового старта.
+If the application did crash on the welcome step (the crash log contains
+`Web authentication failed`), the watchdog does not roll the profile back and does not
+disable plugins: it cleans the cookies, launches the application once more and waits for a
+healthy start.
 
-### Привязка сторожа к рестарту
+### Binding the watchdog to a restart
 
-Каждый рестарт получает токен:
+Every restart gets a token:
 
 ```
 dsh_restart → marker { token, sessionId } + watchdog.json { token }
-сторож  → перед откатом сверяет токен в watchdog.json
-старт   → хост удаляет watchdog.json (токен аннулирован)
+watchdog  → compares the token in watchdog.json before rolling back
+start     → the host deletes watchdog.json (the token is voided)
 ```
 
-Поэтому сторож срабатывает только для того рестарта, который его запустил, и не может
-тронуть приложение, поднятое позже или другим рестартом.
+So the watchdog triggers only for the restart that started it, and cannot touch an
+application raised later or by another restart.
 
-Перед откатом сторож сравнивает SHA-256 файлов `package.json`, `cordis.patch.yml`,
-`cordis.yml` с сохранёнными в момент запроса. Если файлы изменились вручную, откат
-не выполняется — считается, что правки взял на себя человек.
+Before rolling back, the watchdog compares the SHA-256 of `package.json`,
+`cordis.patch.yml`, `cordis.yml` with the ones saved at request time. If the files were
+changed by hand, no rollback is performed — the human is assumed to have taken over the
+edits.
 
-Файлы профиля пишутся без BOM (`WriteAllText` + `UTF8Encoding(false)`), иначе хост
-не может прочитать `package.json`.
+Profile files are written without a BOM (`WriteAllText` + `UTF8Encoding(false)`), otherwise
+the host cannot read `package.json`.
 
-### Известное ограничение: задача подагента после его завершения
+### Known limitation: a subagent's job after its completion
 
-Если подагент запустил фоновую задачу и завершил ход, DSH удаляет запись об этой
-задаче вместе с агентом, хотя сама задача продолжает работать. Проверка перед
-рестартом такую задачу **не увидит** и рестарт не отклонит.
+If a subagent started a background job and finished its turn, DSH deletes the record of
+that job together with the agent, although the job itself keeps running. The pre-restart
+check **will not see** such a job and will not refuse the restart.
 
-Что покрыто:
+What is covered:
 
-| Владелец работы | Отказ |
+| Owner of the work | Refusal |
 |---|---|
-| Своя фоновая задача | да |
-| Подагент или чужая сессия ещё работают | да |
-| Их задачи, пока владелец жив | да |
-| Задача подагента после завершения его хода | нет |
+| Own background job | yes |
+| A subagent or another session is still working | yes |
+| Their jobs, while the owner is alive | yes |
+| A subagent's job after its turn finished | no |
 
-Почему так: реестр задач `ctx.jobs` ключуется по id агента и очищается при его
-уничтожении; обёртка `jobs.start` видит только задачи, запущенные через этот путь, а
-подагент запускает их иначе. Детект по дочерним процессам ненадёжен: рядом постоянно
-появляются и исчезают служебные процессы приложения. Решение отложено.
+Why: the job registry `ctx.jobs` is keyed by agent id and is cleared when the agent is
+destroyed; the `jobs.start` wrapper sees only jobs started through that path, while a
+subagent starts them differently. Detection by child processes is unreliable: the
+application's service processes constantly appear and disappear nearby. The solution is
+deferred.
 
-## Установка
+## Screenshots
+
+![Restart dialog](docs/img/settings.jpg)
+
+## Installation
 
 ```bash
 npx --yes github:machine202502/dsh-restart
 ```
 
-Или вручную:
+Or manually:
 
 ```json
 "dsh-restart": "github:machine202502/dsh-restart#main"
 ```
 
-и добавить `dsh-restart` в `dsh.profile.bundles`.
+and add `dsh-restart` to `dsh.profile.bundles`.
 
-После установки нужен перезапуск приложения (можно кнопкой, когда она появится).
+After installation the application needs a restart (you can use the button once it appears).
 
-## Проверка
+## Verification
 
 ```bash
-node tests/smoke.mjs                   # инструмент, проверки, fake, мост
-node tests/load-client.mjs client.js   # клиентский модуль грузится и отдаёт apply
+node tests/smoke.mjs                   # tool, checks, fake, bridge
+node tests/load-client.mjs client.js   # the client module loads and returns apply
 ```
 
-## Лицензия
+## License
 
 MIT

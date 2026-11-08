@@ -28,6 +28,12 @@ window.__ModuleLoader__.load({
         unavailable: 'Settings service is unavailable',
         saveFailed: 'Could not save',
         loading: 'Loading settings…',
+        language: 'Language',
+        languageHint: 'Auto follows the application language',
+        auto: 'Auto',
+        languageRu: 'Русский',
+        languageEn: 'English',
+        languageZh: '中文',
       },
       ru: {
         title: 'Перезапустить DeepSeek Harness?',
@@ -50,18 +56,133 @@ window.__ModuleLoader__.load({
         unavailable: 'Сервис настроек недоступен',
         saveFailed: 'Не удалось сохранить',
         loading: 'Загрузка настроек…',
+        language: 'Язык',
+        languageHint: 'Авто — по языку приложения',
+        auto: 'Авто',
+        languageRu: 'Русский',
+        languageEn: 'English',
+        languageZh: '中文',
+      },
+      zh: {
+        title: '重新启动 DeepSeek Harness？',
+        text: '应用将关闭并重新启动。正在进行的对话轮次会被中断。',
+        keep: '重启后继续当前会话',
+        cancel: '取消',
+        restart: '重新启动',
+        restarting: '正在重新启动…',
+        tooltip: '重新启动 DeepSeek Harness',
+        rowLabel: '重新启动 DeepSeek Harness',
+        failed: '无法重新启动',
+        toolEnabled: '代理可调用 dsh_restart',
+        toolEnabledHint: '关闭后该工具会消失，调用将会失败',
+        watchdog: '看门狗已启用',
+        watchdogHint: '应用未能恢复时回滚配置',
+        seconds: '看门狗等待时间，秒',
+        secondsHint: '1–120',
+        save: '保存',
+        saved: '已保存',
+        unavailable: '设置服务不可用',
+        saveFailed: '无法保存',
+        loading: '正在加载设置…',
+        language: '语言',
+        languageHint: '自动 — 跟随应用语言',
+        auto: '自动',
+        languageRu: 'Русский',
+        languageEn: 'English',
+        languageZh: '中文',
       },
     };
 
-    const LOCALE = (() => {
-      const lang = (document?.documentElement?.lang || navigator?.language || 'en').toLowerCase();
-      return lang.startsWith('ru') ? STRINGS.ru : STRINGS.en;
-    })();
+    const LANGUAGES = ['ru', 'en', 'zh', 'auto'];
+    const DEFAULT_LANGUAGE = 'ru';
+
+    /** The application language an unset or 'auto' preference follows. */
+    const detectLanguage = () => {
+      const raw = String(
+        (typeof document === 'undefined' ? '' : document.documentElement?.lang)
+        || (typeof navigator === 'undefined' ? '' : navigator.language)
+        || 'en',
+      ).toLowerCase();
+      if (raw.startsWith('ru')) return 'ru';
+      if (raw.startsWith('zh')) return 'zh';
+      return 'en';
+    };
+
+    /**
+     * Shared resolution order: an explicit setting, then 'auto' (the document
+     * language, then the browser language), then the convention default ru.
+     */
+    const resolveLanguage = (settings) => {
+      const preference = settings?.language;
+      if (preference === 'ru' || preference === 'en' || preference === 'zh') return preference;
+      if (preference === 'auto') return detectLanguage();
+      return DEFAULT_LANGUAGE;
+    };
+
+    /** The language currently rendered; saved settings load asynchronously. */
+    let uiLanguage = DEFAULT_LANGUAGE;
+    const languageListeners = new Set();
+
+    const applySettings = (values) => {
+      const next = resolveLanguage(values);
+      if (next === uiLanguage) return;
+      uiLanguage = next;
+      for (const listener of languageListeners) {
+        try { listener(uiLanguage); } catch { /* a listener must not break the switch */ }
+      }
+    };
 
     const PORT = 49233;
     const base = `http://127.0.0.1:${PORT}`;
     const CONTINUE_TEXT = '[auto.continue]';
     const FAILED_TEXT = '[auto.continue.failed]';
+
+    const readSettings = async () => {
+      const response = await fetch(`${base}/settings`, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    };
+
+    /** Retry while the host bridge is still starting, then give up. */
+    const loadSettingsData = async () => {
+      let lastError = null;
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        try {
+          return await readSettings();
+        } catch (error) {
+          lastError = error;
+          if (attempt < 3) await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
+        }
+      }
+      throw lastError ?? new Error('settings unavailable');
+    };
+
+    let languagePromise = null;
+    const ensureLanguage = () => {
+      if (languagePromise === null) {
+        languagePromise = loadSettingsData()
+          .then((data) => { applySettings(data?.values); return data; });
+        languagePromise.catch(() => { languagePromise = null; });
+      }
+      return languagePromise;
+    };
+
+    /** Subscribe a component to the language stored in the plugin settings. */
+    const useUiLanguage = () => {
+      const [language, setLanguage] = React.useState(uiLanguage);
+      React.useEffect(() => {
+        let alive = true;
+        const listener = (next) => { if (alive) setLanguage(next); };
+        languageListeners.add(listener);
+        listener(uiLanguage);
+        ensureLanguage().catch(() => { /* no setting: the default ru stays */ });
+        return () => {
+          alive = false;
+          languageListeners.delete(listener);
+        };
+      }, []);
+      return language;
+    };
 
     const ensureStyles = () => {
       if (typeof document === 'undefined') return;
@@ -106,6 +227,9 @@ window.__ModuleLoader__.load({
 .hr-set-input { width: 88px; height: 32px; padding: 0 10px; border: 1px solid #dcdcdc; border-radius: 10px;
   background: #fff; color: inherit; font: inherit; outline: none; box-sizing: border-box; }
 .hr-set-input:focus { border-color: #9a9a9a; }
+.hr-set-select { height: 32px; min-width: 132px; padding: 0 10px; border: 1px solid #dcdcdc; border-radius: 10px;
+  background: #fff; color: inherit; font: inherit; outline: none; box-sizing: border-box; cursor: pointer; }
+.hr-set-select:focus { border-color: #9a9a9a; }
 .hr-set-switch { appearance: none; -webkit-appearance: none; position: relative; width: 36px; height: 20px; margin: 0;
   border-radius: 999px; background: #d9d9d9; cursor: pointer; transition: background 120ms ease; flex: none; }
 .hr-set-switch:checked { background: #1f1f1f; }
@@ -381,29 +505,11 @@ window.__ModuleLoader__.load({
     h('path', { d: 'M8 2.2v5.2' }),
     h('path', { d: 'M4.4 4.2a5.1 5.1 0 1 0 7.2 0' }));
 
-    const tr = (t, key, fallback) => {
-      if (typeof t !== 'function') return fallback;
-      try {
-        const value = t(key);
-        return typeof value === 'string' && value.length > 0 && value !== key ? value : fallback;
-      } catch {
-        return fallback;
-      }
-    };
-
     function RestartButton(props) {
       ensureStyles();
+      const language = useUiLanguage();
+      const strings = STRINGS[language] ?? STRINGS[DEFAULT_LANGUAGE];
       const slotSession = props?.sessionId ?? props?.session?.id ?? null;
-      const t = props?.t;
-      const strings = {
-        title: tr(t, 'dialog.title', LOCALE.title),
-        cancel: tr(t, 'dialog.cancel', LOCALE.cancel),
-        restart: tr(t, 'dialog.restart', LOCALE.restart),
-        restarting: tr(t, 'dialog.restarting', LOCALE.restarting),
-        tooltip: tr(t, 'dialog.tooltip', LOCALE.tooltip),
-        failed: tr(t, 'dialog.failed', LOCALE.failed),
-        label: tr(t, 'dialog.row', LOCALE.rowLabel),
-      };
       return h('button', {
         className: 'hr-footer-button',
         title: strings.tooltip,
@@ -411,7 +517,7 @@ window.__ModuleLoader__.load({
         onClick: () => openDialog({ sessionId: slotSession ?? lastSessionId(), strings, onClose: () => {} }),
       },
         h('span', { className: 'hr-footer-icon' }, h(PowerIcon)),
-        h('span', { className: 'hr-footer-label' }, strings.label),
+        h('span', { className: 'hr-footer-label' }, strings.rowLabel),
       );
     }
 
@@ -470,9 +576,13 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         let alive = true;
-        fetch(`${base}/settings`)
-          .then((response) => response.json())
-          .then((data) => { if (alive) setState({ status: 'ready', values: data.values ?? {} }); })
+        loadSettingsData()
+          .then((data) => {
+            if (!alive) return;
+            const values = data?.values ?? {};
+            applySettings(values);
+            setState({ status: 'ready', values });
+          })
           .catch(() => { if (alive) setState({ status: 'error', values: {} }); });
         return () => { alive = false; };
       }, []);
@@ -480,6 +590,9 @@ window.__ModuleLoader__.load({
       const setValue = (key, value) => {
         setState((current) => ({ ...current, values: { ...current.values, [key]: value } }));
       };
+
+      const values = state.values ?? {};
+      const strings = STRINGS[resolveLanguage(values)] ?? STRINGS[DEFAULT_LANGUAGE];
 
       const save = async () => {
         setSaving(true);
@@ -490,25 +603,28 @@ window.__ModuleLoader__.load({
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify(state.values),
           });
-          const data = await response.json();
-          if (!response.ok) throw new Error(data.error ?? 'save failed');
-          setState({ status: 'ready', values: data.values ?? state.values });
-          setNotice({ text: LOCALE.saved, error: false });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(data?.error ?? `HTTP ${response.status}`);
+          const nextValues = data.values ?? state.values;
+          applySettings(nextValues);
+          setState({ status: 'ready', values: nextValues });
+          const savedStrings = STRINGS[resolveLanguage(nextValues)] ?? STRINGS[DEFAULT_LANGUAGE];
+          setNotice({ text: savedStrings.saved, error: false });
         } catch (error) {
-          setNotice({ text: String(error.message ?? error), error: true });
+          const failedStrings = STRINGS[resolveLanguage(state.values)] ?? STRINGS[DEFAULT_LANGUAGE];
+          setNotice({ text: `${failedStrings.saveFailed}: ${String(error?.message ?? error)}`, error: true });
         } finally {
           setSaving(false);
         }
       };
 
       if (state.status === 'loading') {
-        return h('div', { className: 'hr-set', style: { color: '#8a8a8a' } }, LOCALE.loading);
+        return h('div', { className: 'hr-set', style: { color: '#8a8a8a' } }, strings.loading);
       }
       if (state.status === 'error') {
-        return h('div', { className: 'hr-set', style: { color: '#c0392b' } }, LOCALE.unavailable);
+        return h('div', { className: 'hr-set', style: { color: '#c0392b' } }, strings.unavailable);
       }
 
-      const values = state.values ?? {};
       const row = (label, control, hint) => h('div', { className: 'hr-set-row' },
         h('div', null,
           h('div', { className: 'hr-set-label' }, label),
@@ -522,11 +638,23 @@ window.__ModuleLoader__.load({
         checked,
         onChange: (event) => setValue(key, event.target.checked),
       });
+      const selectedLanguage = LANGUAGES.includes(values.language) ? values.language : DEFAULT_LANGUAGE;
+      const languageOptions = [
+        ['ru', strings.languageRu],
+        ['en', strings.languageEn],
+        ['zh', strings.languageZh],
+        ['auto', strings.auto],
+      ];
 
       return h('div', { className: 'hr-set' },
-        row(LOCALE.toolEnabled, toggle('toolEnabled', values.toolEnabled !== false), LOCALE.toolEnabledHint),
-        row(LOCALE.watchdog, toggle('watchdogEnabled', values.watchdogEnabled !== false), LOCALE.watchdogHint),
-        row(LOCALE.seconds, h('input', {
+        row(strings.language, h('select', {
+          className: 'hr-set-select',
+          value: selectedLanguage,
+          onChange: (event) => setValue('language', event.target.value),
+        }, languageOptions.map(([value, label]) => h('option', { key: value, value }, label))), strings.languageHint),
+        row(strings.toolEnabled, toggle('toolEnabled', values.toolEnabled !== false), strings.toolEnabledHint),
+        row(strings.watchdog, toggle('watchdogEnabled', values.watchdogEnabled !== false), strings.watchdogHint),
+        row(strings.seconds, h('input', {
           type: 'number',
           min: 1,
           max: 120,
@@ -534,9 +662,9 @@ window.__ModuleLoader__.load({
           value: values.watchdogSeconds ?? 10,
           disabled: values.watchdogEnabled === false,
           onChange: (event) => setValue('watchdogSeconds', Number(event.target.value)),
-        }), LOCALE.secondsHint),
+        }), strings.secondsHint),
         h('div', { className: 'hr-set-actions' },
-          h('button', { className: 'hr-set-save', disabled: saving, onClick: save }, LOCALE.save),
+          h('button', { className: 'hr-set-save', disabled: saving, onClick: save }, strings.save),
           notice.text ? h('span', { className: `hr-set-status${notice.error ? ' hr-set-status--error' : ''}` }, notice.text) : null,
         ),
       );
