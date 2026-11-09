@@ -1,0 +1,45 @@
+name: Market index
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 */3 * * *'
+  push:
+    branches: [main]
+    paths:
+      - 'market/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: market
+  cancel-in-progress: true
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Clone the plugin repositories
+        run: |
+          mkdir -p plugins
+          for repo in dsh-browser dsh-screenshoot dsh-restart dsh-choice dsh-notify-win dsh-voice-ext dsh-pricing; do
+            git clone --depth 1 "https://github.com/machine202502/$repo.git" "plugins/$repo"
+          done
+      - name: Rebuild the index
+        run: node market/build-index.mjs --root plugins --out market/index.json
+      - name: Commit when the index changed
+        run: |
+          if git diff --quiet -- market; then
+            echo "индекс без изменений"
+            exit 0
+          fi
+          git config user.name machine202502
+          git config user.email machine202502@gmail.com
+          git add market
+          git commit -m "Rebuild the market index"
+          git push
