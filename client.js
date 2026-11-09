@@ -1,5 +1,5 @@
 window.__ModuleLoader__.load({
-  id: 'dsh-restart',
+  id: '@machine202502/dsh-restart',
   factory(require) {
     const React = require('react');
     const h = React.createElement;

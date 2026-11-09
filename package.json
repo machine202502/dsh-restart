@@ -1,6 +1,6 @@
 {
-  "name": "dsh-restart",
-  "version": "0.2.0",
+  "name": "@machine202502/dsh-restart",
+  "version": "0.2.1",
   "type": "module",
   "description": "Restart DeepSeek Harness from the sidebar or from an agent tool, optionally continuing the same session afterwards.",
   "license": "MIT",

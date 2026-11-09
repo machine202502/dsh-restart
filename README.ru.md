@@ -224,16 +224,16 @@ dsh_restart { fake: true }
 ## Установка
 
 ```bash
-npx --yes github:machine202502/dsh-restart
+dsh plugin --profile desktop add @machine202502/dsh-restart
 ```
 
 Или вручную:
 
 ```json
-"dsh-restart": "github:machine202502/dsh-restart#main"
+"@machine202502/dsh-restart": "^0.2.1"
 ```
 
-и добавить `dsh-restart` в `dsh.profile.bundles`.
+и добавить `@machine202502/dsh-restart` в `dsh.profile.bundles`.
 
 После установки нужен перезапуск приложения (можно кнопкой, когда она появится).
 

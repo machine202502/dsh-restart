@@ -223,16 +223,16 @@ deferred.
 ## Installation
 
 ```bash
-npx --yes github:machine202502/dsh-restart
+dsh plugin --profile desktop add @machine202502/dsh-restart
 ```
 
 Or manually:
 
 ```json
-"dsh-restart": "github:machine202502/dsh-restart#main"
+"@machine202502/dsh-restart": "^0.2.1"
 ```
 
-and add `dsh-restart` to `dsh.profile.bundles`.
+and add `@machine202502/dsh-restart` to `dsh.profile.bundles`.
 
 After installation the application needs a restart (you can use the button once it appears).
 
