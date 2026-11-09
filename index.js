@@ -287,7 +287,7 @@ const runTask = (args) => new Promise((resolve) => {
   child.on('close', (code) => resolve({ code: code ?? -1, stderr }));
 });
 
-const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEnabled = true, watchdogSeconds = 45, delayMs = 1200, language = 'ru' }) => {
+const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEnabled = true, watchdogSeconds = 45, delayMs = 1200, killAtMs = 0, language = 'ru' }) => {
   mkdirSync(dataDir(), { recursive: true });
   const helperPath = join(dataDir(), 'restart-helper.ps1');
   const logPath = join(dataDir(), 'restart.log');
@@ -335,6 +335,10 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
   const recoveryScript = join(dirname(fileURLToPath(import.meta.url)), 'src', 'recovery.mjs');
   const overlayFile = overlayPath();
   const startedAtMs = Date.now();
+  // The delay counts from the moment the caller asked, not from the helper start:
+  // creating the scheduled task and launching the overlay already take a few
+  // seconds, and the caller asked for a restart N seconds after its call.
+  const killAt = Number.isFinite(killAtMs) && killAtMs > 0 ? killAtMs : startedAtMs + delayMs;
 
   const quote = (value) => String(value).replace(/'/g, "''");
   const helper = [
@@ -434,7 +438,9 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
     "Write-State 'restart' $false ''",
     "& \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart-Overlay' /F 2>&1 | ForEach-Object { Log ([string]$_) }",
     "Start-Overlay",
-    `Start-Sleep -Milliseconds ${delayMs}`,
+    `$killAt = [DateTimeOffset]::FromUnixTimeMilliseconds(${killAt})`,
+    "$wait = [int](($killAt - [DateTimeOffset]::Now).TotalMilliseconds)",
+    "if ($wait -gt 0) { Start-Sleep -Milliseconds $wait }",
     `& "$env:SystemRoot\\System32\\taskkill.exe" /PID ${appPid} /T /F 2>&1 | ForEach-Object { Log ([string]$_) }`,
     "Log 'killed'",
     "Start-Sleep -Milliseconds 1500",
@@ -479,7 +485,9 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
       "$ErrorActionPreference = 'Continue'",
       `$log = '${logPath.replace(/'/g, "''")}'`,
       "Add-Content -LiteralPath $log -Value ('plain restart ' + (Get-Date -Format o))",
-      `Start-Sleep -Milliseconds ${delayMs}`,
+      `$killAt = [DateTimeOffset]::FromUnixTimeMilliseconds(${killAt})`,
+      "$wait = [int](($killAt - [DateTimeOffset]::Now).TotalMilliseconds)",
+      "if ($wait -gt 0) { Start-Sleep -Milliseconds $wait }",
       `& "$env:SystemRoot\\System32\\taskkill.exe" /PID ${appPid} /T /F 2>&1 | ForEach-Object { Log ([string]$_) }`,
       "Start-Sleep -Milliseconds 1500",
       "$candidate = Join-Path $env:USERPROFILE '.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe'",
@@ -678,7 +686,15 @@ export function apply(ctx, config = {}) {
       plugins: marker.plugins,
     });
     try {
-      await scheduleRestart({ appPid, exe, profileDir, token, ...runtime });
+      await scheduleRestart({
+        appPid,
+        exe,
+        profileDir,
+        token,
+        ...runtime,
+        ...(typeof options.delayMs === 'number' ? { delayMs: options.delayMs } : {}),
+        ...(typeof options.killAtMs === 'number' ? { killAtMs: options.killAtMs } : {}),
+      });
     } catch (error) {
       clearMarker();
       throw error;
@@ -1089,6 +1105,9 @@ export function apply(ctx, config = {}) {
     name: 'dsh_restart',
     description:
       'Restart the DeepSeek Harness app so plugin or profile changes take effect. '
+      + 'The restart is delayed, not immediate: pass `delaySeconds` (1–10, default 2) so your reply reaches the user '
+      + 'before the app closes. Finish the conversation turn first — write the final message, then call this tool; '
+      + 'the restart fires after the delay, so do not start new work right after calling it. '
       + 'Use it only while developing DSH extensions and the user expects a restart — not for ordinary work, not just to refresh state. '
       + 'It kills running jobs and reopens the session with [auto.continue.<token>] (or [auto.continue.failed.<token>] after an unrecovered boot), so a duplicated or lost continuation is traceable; preflight with { fake: true } or dsh_restart_status when unsure.',
     parameters: obj({
@@ -1104,6 +1123,12 @@ export function apply(ctx, config = {}) {
         type: 'array',
         items: { type: 'string' },
         description: 'Extensions being worked on right now (one or more); the watchdog lists them in its window',
+      },
+      delaySeconds: {
+        type: 'number',
+        description:
+          'How long the app keeps running before the restart: 1 to 10 seconds, default 2. '
+          + 'Values outside the range are clamped; the delay gives your reply time to reach the user.',
       },
     }),
     output: {
@@ -1121,6 +1146,15 @@ export function apply(ctx, config = {}) {
         throw new Error('dsh_restart is only available to the main agent: a subagent cannot restart the app; do not retry, report the need to the parent agent instead');
       }
       const agent = exec?.agent;
+      // The delay is counted from the call itself: the preflight below takes a
+      // couple of seconds, and the caller asked for a restart N seconds after it
+      // called the tool. 1..10 seconds, 2 by default.
+      const delaySeconds = (() => {
+        const raw = Number(args.delaySeconds);
+        if (!Number.isFinite(raw)) return 2;
+        return Math.min(10, Math.max(1, Math.round(raw)));
+      })();
+      const killAtMs = Date.now() + delaySeconds * 1000;
       const service = (name) => {
         try {
           return ctx.get?.(name);
@@ -1208,11 +1242,15 @@ export function apply(ctx, config = {}) {
 
       const sessionId = exec?.agent?.id ?? exec?.agent?.session?.id ?? null;
 
+      // The restart is delayed so the reply reaches the page before the app closes:
+      // 2 seconds by default, clamped to the 1..10 second window the tool documents.
+      // Both `delaySeconds` and `killAtMs` are computed at the top of this call.
+
       if (args.fake === true) {
         return {
           restarted: false,
           ...(sessionId ? { sessionId } : {}),
-          detail: 'Preflight passed; fake restart requested, nothing was restarted.',
+          detail: `Preflight passed; fake restart requested, nothing was restarted (delay would be ${delaySeconds}s).`,
         };
       }
 
@@ -1220,11 +1258,13 @@ export function apply(ctx, config = {}) {
         sessionId,
         reason: typeof args.reason === 'string' && args.reason.trim() !== '' ? args.reason.trim() : 'tool',
         plugins: Array.isArray(args.plugins) ? args.plugins : [],
+        delayMs: delaySeconds * 1000,
+        killAtMs,
       });
       return {
         restarted: true,
         ...(marker.sessionId ? { sessionId: marker.sessionId } : {}),
-        detail: `Restarting DeepSeek Harness in a moment; this session will be reopened with "[auto.continue]"${sessionId ? ` (${sessionId})` : ''}.`,
+        detail: `Restarting DeepSeek Harness in ${delaySeconds}s; this session will be reopened with "[auto.continue]"${sessionId ? ` (${sessionId})` : ''}.`,
       };
     },
   });
