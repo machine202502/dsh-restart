@@ -1105,11 +1105,15 @@ export function apply(ctx, config = {}) {
     name: 'dsh_restart',
     description:
       'Restart the DeepSeek Harness app so plugin or profile changes take effect. '
-      + 'The restart is delayed, not immediate: pass `delaySeconds` (1–10, default 2) so your reply reaches the user '
-      + 'before the app closes. Finish the conversation turn first — write the final message, then call this tool; '
-      + 'the restart fires after the delay, so do not start new work right after calling it. '
+      + 'THE RULE: this call is the last thing you do. Right after it returns, write your final sentence and end the turn — '
+      + 'the only allowed action is the reply the user reads. Do not call another tool, do not keep reasoning, do not measure '
+      + 'logs, do not verify anything, do not start a new step. Nothing you write after this call reaches the user: the app is '
+      + 'killed when the delay ends, so any further work is wasted tokens. '
+      + 'The delay exists only to let your reply render: `delaySeconds` is 1–30 seconds, 2 by default, out-of-range values are clamped. '
+      + 'Spend the delay finishing the reply, never doing work. '
       + 'Use it only while developing DSH extensions and the user expects a restart — not for ordinary work, not just to refresh state. '
-      + 'It kills running jobs and reopens the session with [auto.continue.<token>] (or [auto.continue.failed.<token>] after an unrecovered boot), so a duplicated or lost continuation is traceable; preflight with { fake: true } or dsh_restart_status when unsure.',
+      + 'It kills running jobs and reopens the session with [auto.continue.<token>] (or [auto.continue.failed.<token>] after an unrecovered boot), so a duplicated or lost continuation is traceable; preflight with { fake: true } or dsh_restart_status when unsure. '
+      + 'With { fake: true } nothing restarts, so that call is safe anywhere in the turn.',
     parameters: obj({
       fake: {
         type: 'boolean',
@@ -1127,8 +1131,9 @@ export function apply(ctx, config = {}) {
       delaySeconds: {
         type: 'number',
         description:
-          'How long the app keeps running before the restart: 1 to 10 seconds, default 2. '
-          + 'Values outside the range are clamped; the delay gives your reply time to reach the user.',
+          'How long the app keeps running before the restart: 1 to 30 seconds, default 2. '
+          + 'Values outside the range are clamped. The delay only gives the reply time to render — '
+          + 'finish the turn right after the call, do not use the gap for more work.',
       },
     }),
     output: {
@@ -1152,7 +1157,7 @@ export function apply(ctx, config = {}) {
       const delaySeconds = (() => {
         const raw = Number(args.delaySeconds);
         if (!Number.isFinite(raw)) return 2;
-        return Math.min(10, Math.max(1, Math.round(raw)));
+        return Math.min(30, Math.max(1, Math.round(raw)));
       })();
       const killAtMs = Date.now() + delaySeconds * 1000;
       const service = (name) => {

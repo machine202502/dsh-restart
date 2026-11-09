@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="DSH notifications">
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="#0F1720"/>
+  <path d="M32 14a10 10 0 0 0-10 10v7l-4 6h28l-4-6v-7a10 10 0 0 0-10-10z" stroke="#5B8CFF" stroke-width="3.5" stroke-linejoin="round" fill="none"/>
+  <path d="M27.5 41a4.5 4.5 0 0 0 9 0" stroke="#5B8CFF" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+  <circle cx="32" cy="11" r="2.6" fill="#93B4FF"/>
+  <path d="M15 24v8M10 26v4M49 24v8M54 26v4" stroke="#93B4FF" stroke-width="2.5" stroke-linecap="round"/>
+</svg>

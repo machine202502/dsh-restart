@@ -1,0 +1,235 @@
+{
+  "format": 1,
+  "title": {
+    "en": "machine202502 plugins",
+    "ru": "Плагины machine202502"
+  },
+  "description": {
+    "en": "Everything public from machine202502: interface, tools, models.",
+    "ru": "Всё публичное от machine202502: интерфейс, инструменты, модели."
+  },
+  "metadata": {
+    "categories": {
+      "ui": {
+        "title": {
+          "en": "Interface",
+          "ru": "Интерфейс"
+        }
+      },
+      "tools": {
+        "title": {
+          "en": "Tools",
+          "ru": "Инструменты"
+        }
+      },
+      "integration": {
+        "title": {
+          "en": "Models & integrations",
+          "ru": "Модели и интеграции"
+        }
+      }
+    }
+  },
+  "plugins": [
+    {
+      "name": "@machine202502/dsh-browser",
+      "title": {
+        "en": "Browser"
+      },
+      "description": {
+        "en": "Isolated Playwright browser per session: live tab thumbnails, sidebar section, screenshots in chat, proxy per site and full DevTools access.",
+        "ru": "Изолированный браузер Playwright на сессию: живые миниатюры вкладок, раздел в сайдбаре, скриншоты в чате, прокси по сайту и полный доступ к DevTools."
+      },
+      "icon": "icons/dsh-browser.svg",
+      "author": "machine202502",
+      "homepage": "https://github.com/machine202502/dsh-browser#readme",
+      "repository": {
+        "url": "https://github.com/machine202502/dsh-browser"
+      },
+      "metadata": {
+        "category": "tools"
+      },
+      "versions": [
+        {
+          "version": "0.1.1",
+          "publishTimestamp": 1794193253,
+          "source": {
+            "type": "npm"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@machine202502/dsh-screenshoot",
+      "title": {
+        "en": "Screenshoot"
+      },
+      "description": {
+        "en": "Screen and window capture: monitor sizes, regions, and window shots that work while the window stays in the background.",
+        "ru": "Снимки экрана и окон: размеры мониторов, области и снимок окна, даже если оно не на переднем плане."
+      },
+      "icon": "icons/dsh-screenshoot.svg",
+      "author": "machine202502",
+      "homepage": "https://github.com/machine202502/dsh-screenshoot#readme",
+      "repository": {
+        "url": "https://github.com/machine202502/dsh-screenshoot"
+      },
+      "metadata": {
+        "category": "tools"
+      },
+      "versions": [
+        {
+          "version": "0.1.1",
+          "publishTimestamp": 1794192297,
+          "source": {
+            "type": "npm"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@machine202502/dsh-restart",
+      "title": {
+        "en": "Restart"
+      },
+      "description": {
+        "en": "Restart DeepSeek Harness with one click; the current session continues afterwards.",
+        "ru": "Перезапуск DeepSeek Harness одной кнопкой с продолжением текущей сессии."
+      },
+      "icon": "icons/dsh-restart.svg",
+      "author": "machine202502",
+      "homepage": "https://github.com/machine202502/dsh-restart#readme",
+      "repository": {
+        "url": "https://github.com/machine202502/dsh-restart"
+      },
+      "metadata": {
+        "category": "tools"
+      },
+      "versions": [
+        {
+          "version": "0.2.3",
+          "publishTimestamp": 1794194982,
+          "source": {
+            "type": "npm"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@machine202502/dsh-choice",
+      "title": {
+        "en": "Choice"
+      },
+      "description": {
+        "en": "Pick one of several answers, images or sounds right in the chat",
+        "ru": "Выберите один из вариантов, картинок или звуков прямо в чате"
+      },
+      "icon": "icons/dsh-choice.svg",
+      "author": "machine202502",
+      "homepage": "https://github.com/machine202502/dsh-choice#readme",
+      "repository": {
+        "url": "https://github.com/machine202502/dsh-choice"
+      },
+      "metadata": {
+        "category": "ui"
+      },
+      "versions": [
+        {
+          "version": "0.1.1",
+          "publishTimestamp": 1794193160,
+          "source": {
+            "type": "npm"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@machine202502/dsh-notify-win",
+      "title": {
+        "en": "Notify (win)",
+        "ru": "Уведомления (win)"
+      },
+      "description": {
+        "en": "Native Windows toast and taskbar flash when a DeepSeek Harness task finishes or needs your input",
+        "ru": "Нативные тосты Windows и подсветка задачи, когда ход DeepSeek Harness завершён или нужен ваш ответ"
+      },
+      "icon": "icons/dsh-notify-win.svg",
+      "author": "Andyq",
+      "homepage": "https://github.com/machine202502/dsh-notify-win#readme",
+      "repository": {
+        "url": "https://github.com/machine202502/dsh-notify-win"
+      },
+      "metadata": {
+        "category": "ui"
+      },
+      "versions": [
+        {
+          "version": "0.5.3-fork.1",
+          "publishTimestamp": 1794193393,
+          "source": {
+            "type": "npm"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@machine202502/dsh-voice-ext",
+      "title": {
+        "en": "Voice ext"
+      },
+      "description": {
+        "en": "Local Russian speech recognition with GigaAM v3; keeps the built-in Voice input and adds a provider",
+        "ru": "Локальное распознавание русской речи на GigaAM v3; встроенный Voice input остаётся, добавляется провайдер"
+      },
+      "icon": "icons/dsh-voice-ext.svg",
+      "author": "machine202502",
+      "homepage": "https://github.com/machine202502/dsh-voice-ext#readme",
+      "repository": {
+        "url": "https://github.com/machine202502/dsh-voice-ext"
+      },
+      "metadata": {
+        "category": "integration"
+      },
+      "versions": [
+        {
+          "version": "0.1.1",
+          "publishTimestamp": 1794193236,
+          "source": {
+            "type": "npm"
+          }
+        }
+      ]
+    },
+    {
+      "name": "@machine202502/dsh-pricing",
+      "title": {
+        "en": "Pricing",
+        "ru": "Цены"
+      },
+      "description": {
+        "en": "DeepSeek peak hours and live token prices in the session header",
+        "ru": "Пиковые часы DeepSeek и актуальные цены токенов в шапке сессии"
+      },
+      "icon": "icons/dsh-pricing.svg",
+      "author": "machine202502",
+      "homepage": "https://github.com/machine202502/dsh-pricing#readme",
+      "repository": {
+        "url": "https://github.com/machine202502/dsh-pricing"
+      },
+      "metadata": {
+        "category": "tools"
+      },
+      "versions": [
+        {
+          "version": "0.11.1",
+          "publishTimestamp": 1794193688,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/machine202502/dsh-pricing",
+            "commit": "1e4ca2d485f6b965f7a625c7f81b90f047232049"
+          }
+        }
+      ]
+    }
+  ]
+}
