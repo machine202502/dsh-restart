@@ -9,8 +9,10 @@ continue the same session after the start.
 |---|---|
 | "Restart" button | sidebar footer, next to the account (power icon) |
 | Confirmation | a modal with two buttons, no extra options |
-| Agent tool | `dsh_restart({ fake })` — for extension development only |
-| Session continuation | a restart via the tool opens the session and writes `[auto.continue]` |
+| Agent tool | `dsh_restart({ fake, reason, plugins })` — for extension development only |
+| Session continuation | a restart via the tool opens the session and writes `[auto.continue.<token>]` |
+| Watchdog window | while a restart runs: phase, timer, reason, plugins, live log tail |
+| Recovery | rollback of the profile, quarantine of the suspect plugin, safe mode |
 
 ## How the restart works
 
@@ -18,34 +20,51 @@ The restarting process cannot be a child of the application: `taskkill /T` kills
 tree together with it. So the plugin:
 
 1. writes the marker `%LOCALAPPDATA%\dsh-restart\pending.json`;
-2. creates a one-shot scheduler task `DSH-Restart` (Windows) with a helper script;
-3. the helper waits 1.5 s, closes the application's process tree, waits 1.8 s, launches the
-   `.exe` and deletes the task.
+2. stages the profile files that a restore may need (`prestart.json`, `pending-profile`);
+3. creates a one-shot scheduler task `DSH-Restart` (Windows) or spawns a detached `sh` helper
+   (macOS/Linux);
+4. the helper shows the watchdog window, closes the application's process tree, applies the
+   staged profile files while the app is down, launches it again and deletes the task.
 
-On macOS/Linux a separate `sh` process is used (`kill` + `open`/launch).
+A boot counts as healthy only when the renderer reported in (`client-ready.json`) and no new
+crash log appeared. Then the helper marks the current profile as the rollback target. When the
+boot is not healthy it restores `backup\last-good`, quarantines the plugins whose working tree
+changed (their edits go to `git stash`), and starts again; if that still fails, it boots with
+the base bundles only and records safe mode in `safe-mode.json`.
+
+The profile is never edited under a running app: `POST /profile/restore` stages the files and
+the helper moves them into place while the app is down. Editing `package.json` or
+`cordis.patch.yml` live makes the loader re-apply the plugin tree and freezes the window.
 
 ## Auto-continue
 
 After the start the client reads the marker through the local bridge `127.0.0.1:49233`:
 
 ```
-GET  /claim      → { marker } — atomic: only one client receives the marker
-POST /restart    → write the marker and restart
-GET  /health     → a live-host signal for the watchdog
-GET  /settings   → current overrides
-POST /settings   → save overrides (no restart)
+GET  /claim           → { marker } — one client at a time, the delivery flag lives in the marker
+POST /claim/release   → give the marker back after a failed attempt
+POST /consumed        → retire the marker once the message was really sent
+POST /restart         → write the marker and restart
+GET  /health          → a live-host signal for the watchdog
+GET  /settings        → current overrides
+POST /settings        → save overrides (no restart)
 ```
 
-Exactly one page load claims the marker, so double initialization does not produce two
-messages. A restart via the tool returns the session with an `[auto.continue]` message: the
-client opens the same session, waits for the composer to be ready, inserts the text and
-sends it with the send button (Enter is the fallback). The sidebar footer button does not
-create a marker and does not continue the session.
+The continuation text carries the restart token: `[auto.continue.<token>]`, or
+`[auto.continue.failed.<token>]` after an unrecovered boot. The token is the same one in
+`pending.json` and `overlay.json`, so a duplicated or lost message in the chat can be traced to
+its restart. A marker is delivered to one client only — a 15 second lock plus a persistent
+`deliveredAt` field — and a single attempt sends at most once: the client clicks the send
+button, waits for the composer to clear, and never mixes the button with Enter.
+
+A restart via the tool returns the session with that message: the client opens the same
+session, waits for the composer to be ready, inserts the text and sends it. The sidebar footer
+button does not create a marker and does not continue the session.
 
 The user's draft is not lost: if the field already contains text, it is temporarily stashed
-in `localStorage`, `[auto.continue]` is sent, and then the text is returned to the input
-field (without being sent). The message queue is session state — the plugin neither reads
-nor changes it.
+in `localStorage`, the marker is sent, and then the text is returned to the input field
+(without being sent). The message queue is session state — the plugin neither reads nor
+changes it.
 
 ## The tool
 
@@ -115,12 +134,16 @@ The button in the interface performs none of these checks: the user decides when
 - the restart is performed through the Windows Task Scheduler; if policy forbids creating
   tasks, the restart will not work;
 - workspace sessions that are executing a turn at that moment will be interrupted (as the
-  modal warns).
+  modal warns);
+- the macOS/Linux helper (`src/helper.sh`) mirrors the Windows chain and passes `sh -n`, but
+  has not been run on a real POSIX machine yet;
+- the Tk window needs Python with tkinter and a graphical session; without them the
+  PowerShell window (Windows) or a console tail is used.
 
 ### The button and the tool behave differently
 
-- **`dsh_restart` (agent)** — always opens the session and writes `[auto.continue]`
-  (or `[auto.continue.failed]` if the watchdog rolled the profile back).
+- **`dsh_restart` (agent)** — always opens the session and writes `[auto.continue.<token>]`
+  (or `[auto.continue.failed.<token>]` when the boot was not recovered).
 - **The "Restart DeepSeek Harness" button in the sidebar** — simply restarts the
   application: no marker is created, the session is not continued, no auto-message is sent.
 
@@ -143,26 +166,34 @@ If the application did crash on the welcome step (the crash log contains
 disable plugins: it cleans the cookies, launches the application once more and waits for a
 healthy start.
 
-### Binding the watchdog to a restart
+### How the watchdog decides
 
-Every restart gets a token:
+Every restart gets a token. The marker and `prestart.json` carry it, the overlay shows the
+reason and the plugins, and the continuation text ends with it.
 
 ```
-dsh_restart → marker { token, sessionId } + watchdog.json { token }
-watchdog  → compares the token in watchdog.json before rolling back
-start     → the host deletes watchdog.json (the token is voided)
+start     → boot is healthy when client-ready.json is fresh and no crash log appeared
+healthy   → the current profile is marked as the rollback target (backup\last-good)
+not healthy → restore last-good, quarantine the plugins whose git tree changed (stash their edits)
+still bad → safe mode: base bundles only, the restored list goes to safe-mode.json
 ```
 
-So the watchdog triggers only for the restart that started it, and cannot touch an
-application raised later or by another restart.
+A recovered boot continues the session normally; only safe mode reports
+`[auto.continue.failed.<token>]`. The profile files are written without a BOM
+(`UTF8Encoding(false)`), otherwise the host cannot read `package.json`.
 
-Before rolling back, the watchdog compares the SHA-256 of `package.json`,
-`cordis.patch.yml`, `cordis.yml` with the ones saved at request time. If the files were
-changed by hand, no rollback is performed — the human is assumed to have taken over the
-edits.
+### The window
 
-Profile files are written without a BOM (`WriteAllText` + `UTF8Encoding(false)`), otherwise
-the host cannot read `package.json`.
+The window is optional: the recovery itself is pure Node. Three tiers, chosen at start:
+
+| Condition | Window |
+|---|---|
+| Python with tkinter and a display | Tk window (`src/overlay.py`), localized ru/en/zh |
+| tkinter missing, Windows | thin PowerShell window (`src/overlay.ps1`), localized |
+| no GUI at all (e.g. Linux without a display) | `tail -f` of `restart.log` |
+
+The log fills the remaining height, the window is resizable, both tiers start at
+`640×420`, and the view stays pinned to the bottom unless the user scrolls up.
 
 ### Known limitation: a subagent's job after its completion
 

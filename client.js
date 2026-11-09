@@ -134,8 +134,14 @@ window.__ModuleLoader__.load({
 
     const PORT = 49233;
     const base = `http://127.0.0.1:${PORT}`;
+    // The token after the dot makes a duplicated or lost continuation traceable
+    // in the chat itself, not only in restart.log.
     const CONTINUE_TEXT = '[auto.continue]';
     const FAILED_TEXT = '[auto.continue.failed]';
+    const continuationText = (failed, token) => {
+      const suffix = typeof token === 'string' && token !== '' ? `.${token}` : '';
+      return failed ? `[auto.continue.failed${suffix}]` : `[auto.continue${suffix}]`;
+    };
 
     const readSettings = async () => {
       const response = await fetch(`${base}/settings`, { cache: 'no-store' });
@@ -374,33 +380,47 @@ window.__ModuleLoader__.load({
         document.execCommand('insertText', false, markerText);
       }
 
-      for (let tick = 0; tick < 12; tick++) {
-        await sleep(150);
-        // Only the marker itself may ever be submitted.
-        if (editorText(area) !== markerText) {
-          if (editorText(area) === '') continue;
-          restoreDraft();
-          return { ok: false, reason: 'composer changed' };
-        }
+      // One method per attempt, and at most three attempts: the old loop clicked
+      // up to twelve times and then pressed Enter, which could post the same
+      // continuation twice when the composer cleared slowly.
+      let clicked = false;
+      for (let attempt = 1; attempt <= 3; attempt++) {
         const send = findSendButton();
-        if (send === undefined || send.disabled) continue;
-        send.click();
-        await sleep(300);
+        if (send !== undefined && !send.disabled) {
+          clicked = true;
+          send.click();
+          diag('send-attempt', { attempt, via: 'button', text: markerText });
+        } else {
+          diag('send-attempt', { attempt, via: 'button-missing' });
+        }
+        for (let tick = 0; tick < 10; tick++) {
+          await sleep(200);
+          if (editorText(area) === '') {
+            restoreDraft();
+            return { ok: true, via: 'button', draftKept: draft !== '' };
+          }
+          if (editorText(area) !== markerText) break;
+        }
         if (editorText(area) === '') {
           restoreDraft();
           return { ok: true, via: 'button', draftKept: draft !== '' };
         }
+        if (editorText(area) !== markerText) break;
       }
 
-      // Last resort: Enter, but again only for the marker text.
-      if (editorText(area) === markerText) {
+      // Enter only when no click was ever sent: mixing the two is what makes a
+      // duplicate possible.
+      if (!clicked && editorText(area) === markerText) {
+        diag('send-attempt', { attempt: 1, via: 'enter', text: markerText });
         const key = { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true, cancelable: true };
         area.dispatchEvent(new KeyboardEvent('keydown', key));
         area.dispatchEvent(new KeyboardEvent('keyup', key));
-        await sleep(300);
-        if (editorText(area) === '') {
-          restoreDraft();
-          return { ok: true, via: 'enter', draftKept: draft !== '' };
+        for (let tick = 0; tick < 10; tick++) {
+          await sleep(200);
+          if (editorText(area) === '') {
+            restoreDraft();
+            return { ok: true, via: 'enter', draftKept: draft !== '' };
+          }
         }
       }
 
@@ -530,6 +550,7 @@ window.__ModuleLoader__.load({
       let pending = null;
       let queued = false;
       let failed = false;
+      let recovered = false;
       try {
         const response = await fetch(`${base}/claim`);
         if (!response.ok) return;
@@ -537,10 +558,11 @@ window.__ModuleLoader__.load({
         pending = claimed?.marker ?? null;
         queued = claimed?.queued === true;
         failed = claimed?.failed === true;
+        recovered = claimed?.recovered === true;
       } catch {
         return;
       }
-      if (failed) pending = { ...(pending ?? {}), failed: true };
+      if (failed) pending = { ...(pending ?? {}), failed: true, recovered };
       // A pending queue keeps its messages: no marker is posted for it.
       if (queued) {
         diag('skip-queued', {});
@@ -549,6 +571,20 @@ window.__ModuleLoader__.load({
       diag('boot', { pending, hasWorkspace: Boolean(uiWorkspace) });
       if (!pending || pending.continue !== true) return;
       pending = { ...pending, failed };
+      // At most one continuation per restart token, even across page reloads: a
+      // reload between the submit and `/consumed` used to deliver it twice.
+      const submittedKey = pending.token ? `dsh-restart:submitted:${pending.token}` : null;
+      if (submittedKey !== null) {
+        try {
+          if (window.localStorage.getItem(submittedKey) === '1') {
+            diag('already-submitted', { token: pending.token });
+            try { await fetch(`${base}/consumed`, { method: 'POST' }); } catch { /* the bridge may be gone */ }
+            return;
+          }
+        } catch {
+          // A blocked storage must not block the continuation.
+        }
+      }
       const sessionId = pending.sessionId ?? lastSessionId();
       if (sessionId && uiWorkspace?.openSession) {
         try {
@@ -559,13 +595,24 @@ window.__ModuleLoader__.load({
         }
       }
       // Give the composer a moment to mount, then submit "continue".
-      for (const delay of [800, 1500, 3000]) {
+      for (const delay of [800, 1500, 3000, 6000, 10000]) {
         await new Promise((resolve) => setTimeout(resolve, delay));
-        const result = await submitContinue(pending.failed === true ? FAILED_TEXT : CONTINUE_TEXT);
+        const failedText = pending.failed === true && pending.recovered !== true;
+        const result = await submitContinue(continuationText(failedText, pending.token));
         diag('submit', result);
-        if (result.ok) return;
+        if (result.ok) {
+          // The marker is retired only now: a boot without a composer keeps it
+          // so the retry after a recovery can still deliver the message.
+          if (submittedKey !== null) {
+            try { window.localStorage.setItem(submittedKey, '1'); } catch { /* storage may be blocked */ }
+          }
+          try { await fetch(`${base}/consumed`, { method: 'POST' }); } catch { /* the bridge may be gone */ }
+          return;
+        }
       }
       diag('gave-up', {});
+      // Keep the marker for a later boot, but let another page load claim it.
+      try { await fetch(`${base}/claim/release`, { method: 'POST' }); } catch { /* the bridge may be down */ }
     };
 
     function SettingsForm() {
@@ -659,7 +706,7 @@ window.__ModuleLoader__.load({
           min: 1,
           max: 120,
           className: 'hr-set-input',
-          value: values.watchdogSeconds ?? 10,
+          value: values.watchdogSeconds ?? 45,
           disabled: values.watchdogEnabled === false,
           onChange: (event) => setValue('watchdogSeconds', Number(event.target.value)),
         }), strings.secondsHint),
@@ -669,6 +716,192 @@ window.__ModuleLoader__.load({
         ),
       );
     }
+
+    /**
+     * Report renderer failures with an attributed plugin id.
+     *
+     * The host already sees "entry did not activate" at boot; this covers the
+     * other half — a plugin that mounts and then throws. The plugin id is taken
+     * from the client bundle path in the stack, which is the only stable marker
+     * the module loader leaves behind.
+     */
+    const installRecoveryReports = () => {
+      if (window.__dshRestartRecoveryReports) return;
+      window.__dshRestartRecoveryReports = true;
+      const attribution = (value) => {
+        const text = String(value?.stack ?? value?.message ?? value ?? '');
+        const match = text.match(/(@deepseek-ai\/[a-z0-9.-]+|dsh-[a-z0-9-]+)\/client\.js/iu);
+        return match ? match[1] : null;
+      };
+      const push = (plugin, message) => {
+        try {
+          void fetch(`${base}/errors`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ items: [{ plugin, message, at: new Date().toISOString() }] }),
+          });
+        } catch {
+          // The bridge may be down during a restart.
+        }
+      };
+      window.addEventListener('error', (event) => {
+        const value = event?.error ?? event?.message;
+        if (!value) return;
+        // Layout noise, not a plugin failure.
+        if (/ResizeObserver loop/i.test(String(event?.message ?? ''))) return;
+        push(attribution(value), String(event?.message ?? value?.message ?? 'error'));
+      });
+      window.addEventListener('unhandledrejection', (event) => {
+        const value = event?.reason;
+        if (!value) return;
+        push(attribution(value), String(value?.message ?? value));
+      });
+    };
+
+    const RECOVERY_TEXT = {
+      en: {
+        title: 'The previous start was recovered automatically',
+        off: 'disabled',
+        safe: 'Safe mode: only the base extensions are on',
+        restore: 'Bring back',
+        dismiss: 'Hide',
+        restart: 'restart the app to apply',
+      },
+      ru: {
+        title: 'Прошлый запуск восстановлен автоматически',
+        off: 'отключены',
+        safe: 'Безопасный режим: включены только базовые расширения',
+        restore: 'Вернуть',
+        dismiss: 'Скрыть',
+        restart: 'перезапустите приложение, чтобы применить',
+      },
+      zh: {
+        title: '上次启动已自动恢复',
+        off: '已禁用',
+        safe: '安全模式：仅启用基础扩展',
+        restore: '恢复',
+        dismiss: '隐藏',
+        restart: '重启应用以生效',
+      },
+    };
+
+    const recoveryLanguage = (saved) => {
+      if (saved === 'ru' || saved === 'en' || saved === 'zh') return saved;
+      const raw = String(document.documentElement?.lang || navigator.language || 'ru').toLowerCase();
+      if (raw.startsWith('ru')) return 'ru';
+      if (raw.startsWith('zh')) return 'zh';
+      return 'en';
+    };
+
+    /** The saved interface language of this plugin, so the banner follows it. */
+    const savedLanguage = async () => {
+      try {
+        const response = await fetch(`${base}/settings`, { cache: 'no-store' });
+        if (!response.ok) return null;
+        const data = await response.json();
+        const language = data?.values?.language;
+        return language === 'auto' ? null : (language ?? null);
+      } catch {
+        return null;
+      }
+    };
+
+    /**
+     * A banner after an automatic recovery: what was disabled, and the two
+     * actions that matter — bring the extensions back or hide the notice.
+     */
+    const showRecoveryBanner = async () => {
+      let data = null;
+      try {
+        const response = await fetch(`${base}/failed`, { cache: 'no-store' });
+        if (!response.ok) return;
+        data = await response.json();
+      } catch {
+        return;
+      }
+      const quarantine = data?.quarantine?.entries ?? [];
+      const safeMode = data?.safeMode;
+      const failed = data?.failed;
+      if (!failed && quarantine.length === 0 && safeMode?.active !== true) return;
+      if (document.querySelector('.hr-recovery') !== null) return;
+
+      const strings = RECOVERY_TEXT[recoveryLanguage(await savedLanguage())] ?? RECOVERY_TEXT.en;
+      const names = quarantine.map((entry) => entry.name).filter((name) => typeof name === 'string');
+      if (document.querySelector('style[data-plugin="dsh-restart-recovery"]') === null) {
+        const style = document.createElement('style');
+        style.dataset.plugin = 'dsh-restart-recovery';
+        style.textContent = `
+.hr-recovery { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 3900;
+  display: flex; align-items: center; gap: 14px; max-width: min(760px, calc(100vw - 48px));
+  padding: 10px 12px 10px 16px; border-radius: 14px;
+  border: .5px solid var(--dsw-alias-border-l1, rgba(0, 0, 0, .12));
+  background: var(--dsw-alias-bg-l1, #fff); color: var(--dsw-alias-label-primary, #0f1115);
+  font-size: 13px; line-height: 18px; box-shadow: 0 2px 10px rgba(0, 0, 0, .12); }
+.hr-recovery-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.hr-recovery-actions { display: flex; flex: none; gap: 8px; }
+.hr-recovery-btn { height: 28px; padding: 0 12px; border-radius: 9px; border: .5px solid transparent;
+  background: var(--dsw-alias-label-primary, #0f1115); color: #fff; font: inherit; font-size: 12px;
+  cursor: pointer; }
+.hr-recovery-btn--ghost { background: transparent; border-color: var(--dsw-alias-border-l1, rgba(0, 0, 0, .16));
+  color: var(--dsw-alias-label-primary, #0f1115); }
+`;
+        document.head.appendChild(style);
+      }
+      const host = document.createElement('div');
+      host.className = 'hr-recovery';
+      host.dataset.plugin = 'dsh-restart';
+
+      const text = document.createElement('div');
+      text.className = 'hr-recovery-text';
+      const reason = safeMode?.active === true
+        ? strings.safe
+        : `${strings.off}: ${names.join(', ') || '—'}`;
+      text.textContent = `${strings.title} · ${reason}`;
+      host.appendChild(text);
+
+      const actions = document.createElement('div');
+      actions.className = 'hr-recovery-actions';
+
+      if (names.length > 0 || safeMode?.active === true) {
+        const restore = document.createElement('button');
+        restore.type = 'button';
+        restore.className = 'hr-recovery-btn';
+        restore.textContent = strings.restore;
+        restore.addEventListener('click', async () => {
+          const path = safeMode?.active === true ? '/safe-mode/restore' : '/quarantine/restore';
+          try {
+            const response = await fetch(`${base}${path}`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId: null }),
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(payload?.error ?? `HTTP ${response.status}`);
+            text.textContent = `${strings.restore}: ${strings.restart}`;
+            restore.remove();
+          } catch (error) {
+            text.textContent = String(error?.message ?? error);
+          }
+        });
+        actions.appendChild(restore);
+      }
+
+      const dismiss = document.createElement('button');
+      dismiss.type = 'button';
+      dismiss.className = 'hr-recovery-btn hr-recovery-btn--ghost';
+      dismiss.textContent = strings.dismiss;
+      dismiss.addEventListener('click', async () => {
+        try {
+          await fetch(`${base}/failed/dismiss`, { method: 'POST' });
+        } catch {
+          // Hiding is local anyway.
+        }
+        host.remove();
+      });
+      actions.appendChild(dismiss);
+      host.appendChild(actions);
+      document.body.appendChild(host);
+    };
 
     return {
       inject: ['slots', 'uiWorkspace'],
@@ -682,6 +915,7 @@ window.__ModuleLoader__.load({
             });
           } catch { /* bridge may be down */ }
         };
+        installRecoveryReports();
         try { void fetch(`${base}/client-loaded`); } catch { /* bridge may be down */ }
         try {
           applyInner(ctx, report);
@@ -689,6 +923,7 @@ window.__ModuleLoader__.load({
           // A broken plugin must not fail the whole web boot: report and stay inert.
           report('apply-crashed', error);
         }
+        setTimeout(() => { void showRecoveryBanner(); }, 2600);
       },
     };
 

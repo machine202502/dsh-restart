@@ -1,10 +1,12 @@
 import { execFileSync, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSettingsStore, LANGUAGES } from './src/settings.js';
+import { capabilities, capabilityWarnings } from './src/capabilities.js';
 
 export const inject = ['tools'];
 
@@ -39,6 +41,143 @@ const profileHashes = (profileDir) => {
   return out;
 };
 const backupRoot = () => join(dataDir(), 'backup');
+const prestartPath = () => join(dataDir(), 'prestart.json');
+const overlayPath = () => join(dataDir(), 'overlay.json');
+const quarantinePath = () => join(dataDir(), 'quarantine.json');
+const safeModePath = () => join(dataDir(), 'safe-mode.json');
+const errorsPath = () => join(dataDir(), 'errors.json');
+const clientReadyPath = () => join(dataDir(), 'client-ready.json');
+
+/**
+ * Every `link:` dependency of the profile with its git state.
+ *
+ * A dirty working tree is the usual reason a restart breaks: the code that ran
+ * before the restart is not the code under test. Recording it lets the recovery
+ * script quarantine exactly those packages and preserve their changes in a stash.
+ */
+const linkPackages = (profileDir) => {
+  const out = [];
+  let pkg = null;
+  try {
+    pkg = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'));
+  } catch {
+    return out;
+  }
+  const dependencies = pkg?.dependencies ?? {};
+  for (const [name, spec] of Object.entries(dependencies)) {
+    if (typeof spec !== 'string' || !spec.startsWith('link:')) continue;
+    const dir = spec.slice('link:'.length);
+    const entry = { name, dir, dirty: false, head: null };
+    try {
+      const status = execFileSync('git', ['-C', dir, 'status', '--porcelain'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      entry.dirty = status.trim() !== '';
+      const head = execFileSync('git', ['-C', dir, 'rev-parse', '--short', 'HEAD'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+      entry.head = head.trim();
+    } catch {
+      // Not a repository or git is unavailable: the package is still recorded.
+    }
+    out.push(entry);
+  }
+  return out;
+};
+
+/** Everything the helper and the recovery script need before the app is killed. */
+const writePrestart = ({ profileDir, token, timeoutSeconds, reason = '', plugins = [] }) => {
+  writeJson(prestartPath(), {
+    token,
+    startedAt: new Date().toISOString(),
+    timeoutSeconds,
+    reason,
+    plugins,
+    profileDir,
+    hashes: profileHashes(profileDir),
+    packages: linkPackages(profileDir),
+  });
+};
+
+const writeJson = (file, value) => {
+  try {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
+  } catch {
+    // A state file that cannot be written must not block the restart.
+  }
+};
+
+/**
+ * Stage profile files to be written while the app is down.
+ *
+ * Editing `package.json` or `cordis.patch.yml` under a running app makes the
+ * loader re-apply the whole tree, which freezes the window until a manual
+ * restart. The helper moves these files into place right before it starts the
+ * app again, so the change is never seen by a live process.
+ */
+const stageProfileRestore = ({ bundles } = {}) => {
+  const dir = join(dataDir(), 'pending-profile');
+  try {
+    rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // A missing directory is the normal case.
+  }
+  mkdirSync(dir, { recursive: true });
+  const staged = [];
+  for (const name of ['package.json', 'cordis.patch.yml', 'cordis.yml']) {
+    try {
+      writeFileSync(join(dir, name), readFileSync(join(backupRoot(), 'last-good', name)));
+      staged.push(name);
+    } catch {
+      // A file that was never snapshotted is simply not staged.
+    }
+  }
+  if (Array.isArray(bundles) && staged.includes('package.json')) {
+    try {
+      const file = join(dir, 'package.json');
+      const pkg = JSON.parse(readFileSync(file, 'utf8'));
+      pkg.dsh = pkg.dsh ?? {};
+      pkg.dsh.profile = pkg.dsh.profile ?? {};
+      pkg.dsh.profile.bundles = bundles;
+      writeFileSync(file, `${JSON.stringify(pkg, null, 2)}\n`, 'utf8');
+    } catch {
+      // The snapshot stays as it is when the bundle edit cannot be applied.
+    }
+  }
+  return { dir, staged };
+};
+
+/** The bundle list of a profile directory. */
+const readBundles = (dir) => {
+  try {
+    const pkg = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'));
+    return Array.isArray(pkg?.dsh?.profile?.bundles) ? [...pkg.dsh.profile.bundles] : [];
+  } catch {
+    return [];
+  }
+};
+
+const readJson = (file) => {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8'));
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * A standalone Node binary for the recovery script.
+ *
+ * `process.execPath` is the desktop executable, not Node: handing it a script
+ * path would just start a second copy of the app.
+ */
+const nodeBinary = () => {
+  const candidates = [
+    join(process.env.USERPROFILE ?? homedir(), '.dsh', 'dsh-runtimes', 'dsh-primary-runtime', 'dependencies', 'node', 'bin', 'node.exe'),
+    join(dirname(process.execPath), 'resources', 'runtime', 'primary-runtime', 'dependencies', 'node', 'bin', 'node.exe'),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return 'node.exe';
+};
 
 /**
  * Session ids known to the workspace store.
@@ -148,7 +287,7 @@ const runTask = (args) => new Promise((resolve) => {
   child.on('close', (code) => resolve({ code: code ?? -1, stderr }));
 });
 
-const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEnabled = true, watchdogSeconds = 10, delayMs = 1200 }) => {
+const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEnabled = true, watchdogSeconds = 45, delayMs = 1200, language = 'ru' }) => {
   mkdirSync(dataDir(), { recursive: true });
   const helperPath = join(dataDir(), 'restart-helper.ps1');
   const logPath = join(dataDir(), 'restart.log');
@@ -160,24 +299,86 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
   const good = join(backupRoot(), 'last-good');
   const backup = existsSync(good) ? good : null;
   const startedAt = new Date().toISOString();
-  const timeoutSec = Math.min(120, Math.max(1, Number(watchdogSeconds) || 10));
+  const timeoutSec = Math.min(180, Math.max(10, Number(watchdogSeconds) || 45));
   // Chromium keeps one auth cookie per launch; stale ones overflow the header
   // limit and break the welcome handshake (HTTP 431).
   const cookieScript = join(dirname(fileURLToPath(import.meta.url)), 'src', 'cookie-clean.py');
+  const overlayScript = join(dirname(fileURLToPath(import.meta.url)), 'src', 'overlay.ps1');
+  const overlayPython = join(dirname(fileURLToPath(import.meta.url)), 'src', 'overlay.py');
+  const caps = capabilities();
+  // The window speaks the plugin's language; 'auto' means the app locale, and the
+  // watchdog's own default is Russian.
+  const overlayLanguage = language === 'ru' || language === 'en' || language === 'zh' ? language : 'ru';
+  // One launcher file, so the scheduled task carries a plain path instead of a
+  // quoted command line. Tier 1: Tk window; tier 2: PowerShell window; tier 3: a
+  // console that tails the log, for a machine without any GUI toolkit.
+  const launcherPath = join(dataDir(), process.platform === 'win32' ? 'overlay-launch.cmd' : 'overlay-launch.sh');
+  const overlayCommand = (() => {
+    if (caps.ui === 'tk' && caps.python !== null) {
+      return `${caps.python.binary} "${overlayPython}" --state "${overlayPath()}" --log "${logPath}" --lang ${overlayLanguage}`;
+    }
+    if (process.platform === 'win32') {
+      return `powershell.exe -WindowStyle Hidden -NoProfile -STA -ExecutionPolicy Bypass -File "${overlayScript}" -State "${overlayPath()}" -Log "${logPath}" -Lang ${overlayLanguage}`;
+    }
+    return `tail -f "${logPath}"`;
+  })();
+  try {
+    mkdirSync(dataDir(), { recursive: true });
+    if (process.platform === 'win32') {
+      writeFileSync(launcherPath, `@echo off\r\n${overlayCommand}\r\n`, 'utf8');
+    } else {
+      writeFileSync(launcherPath, `#!/bin/sh\nexec ${overlayCommand}\n`, { mode: 0o755 });
+    }
+  } catch {
+    // The window is optional: the restart itself never depends on it.
+  }
+  const recoveryScript = join(dirname(fileURLToPath(import.meta.url)), 'src', 'recovery.mjs');
+  const overlayFile = overlayPath();
+  const startedAtMs = Date.now();
 
   const quote = (value) => String(value).replace(/'/g, "''");
   const helper = [
     "$ErrorActionPreference = 'Continue'",
     `$log = '${quote(logPath)}'`,
     `$boot = '${quote(boot)}'`,
-    `$failed = '${quote(failed)}'`,
-    `$backup = '${quote(backup ?? '')}'`,
+    `$overlay = '${quote(overlayFile)}'`,
+    `$overlayScript = '${quote(overlayScript)}'`,
+    `$recovery = '${quote(recoveryScript)}'`,
+    `$node = '${quote(nodeBinary())}'`,
     `$profile = '${quote(profileDir)}'`,
     `$exe = '${quote(exe)}'`,
-    `$startedAt = [datetime]'${startedAt}'`,
-    `$token = '${quote(token)}'`,
-    `$watchdog = '${quote(watchdogPath())}'`,
     `$cookies = '${quote(cookieScript)}'`,
+    `$launcher = '${quote(launcherPath)}'`,
+    `$lang = '${quote(overlayLanguage)}'`,
+    `$prestart = '${quote(prestartPath())}'`,
+    `$token = '${quote(token)}'`,
+    `$timeout = ${timeoutSec}`,
+    "function Log($m) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $m) -Encoding UTF8 }",
+    "function Rotate-Log {",
+    "  # Old runs mixed UTF-16 and ANSI in one file, which no reader can split.",
+    "  # Keep the history as .old and continue in a clean UTF-8 file.",
+    "  if (-not (Test-Path -LiteralPath $log)) { return }",
+    "  try {",
+    "    $bytes = [System.IO.File]::ReadAllBytes($log)",
+    "    if ($bytes.Length -lt 2) { return }",
+    "    $limit = [Math]::Min(4096, $bytes.Length - 1)",
+    "    $zeros = 0",
+    "    for ($i = 0; $i -le $limit; $i++) { if ($bytes[$i] -eq 0) { $zeros++ } }",
+    "    if ($zeros -gt 0) {",
+    "      Move-Item -LiteralPath $log -Destination ($log + '.old') -Force",
+    "      New-Item -ItemType File -Path $log -Force | Out-Null",
+    "    }",
+    "  } catch { }",
+    "}",
+    "Rotate-Log",
+    "function Write-State($phase, $ok, $detail) {",
+    "  $reason = ''; $plugins = @()",
+    "  if (Test-Path -LiteralPath $prestart) {",
+    "    try { $preRaw = Get-Content -LiteralPath $prestart -Raw -Encoding UTF8; $preRaw = $preRaw -replace [string][char]0xFEFF, ''; $pre = $preRaw | ConvertFrom-Json; $reason = [string]$pre.reason; $plugins = @($pre.plugins | Where-Object { $_ }) } catch { }",
+    "  }",
+    "  $payload = @{ phase = $phase; ok = $ok; detail = $detail; reason = $reason; plugins = $plugins; language = $lang; token = $token; updatedAt = (Get-Date).ToString('o') } | ConvertTo-Json -Compress",
+    "  try { [System.IO.File]::WriteAllText($overlay, $payload, (New-Object System.Text.UTF8Encoding($false))) } catch { }",
+    "}",
     "function Purge-Cookies {",
     "  $candidate = Join-Path $env:USERPROFILE '.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe'",
     "  if (Test-Path -LiteralPath $candidate) { $python = $candidate } else { $python = (Get-Command python.exe -ErrorAction SilentlyContinue).Source }",
@@ -190,79 +391,88 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
     "  if (-not $file -or $file.LastWriteTime -lt $since) { return $false }",
     "  return [bool](Select-String -LiteralPath $file.FullName -Pattern 'Web authentication failed' -Quiet)",
     "}",
-    "function Log($m) { Add-Content -LiteralPath $log -Value ((Get-Date -Format o) + ' ' + $m) }",
-    "function FreshBoot($since) {",
-    "  if (-not (Test-Path $boot)) { return $false }",
-    "  try { $b = Get-Content -LiteralPath $boot -Raw | ConvertFrom-Json; return ([datetime]$b.at -gt $since) } catch { return $false }",
-    "}",
-    "function HashesMatch {",
-    "  if (-not (Test-Path $watchdog)) { return $false }",
+    "function Start-Overlay {",
+    "  if (-not (Test-Path -LiteralPath $launcher)) { Log 'overlay launcher missing'; return }",
+    "  # A separate task owns the window: Task Scheduler kills the children of the",
+    "  # task that ends, and the restart task must come back quicker than a human.",
+    "  $action = 'cmd.exe /c \"\"' + $launcher + '\"\"'",
     "  try {",
-    "    $state = Get-Content -LiteralPath $watchdog -Raw | ConvertFrom-Json",
-    "    if ($state.token -ne $token) { return $false }",
-    "    foreach ($name in @('package.json', 'cordis.patch.yml', 'cordis.yml')) {",
-    "      $expected = $state.hashes.$name",
-    "      if ($null -eq $expected -or $expected -eq '') { continue }",
-    "      $path = Join-Path $profile $name",
-    "      if (-not (Test-Path -LiteralPath $path)) { return $false }",
-    "      $actual = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash",
-    "      if ($actual -ne $expected) { return $false }",
-    "    }",
-    "    return $true",
-    "  } catch { return $false }",
+    "    & \"$env:SystemRoot\\System32\\schtasks.exe\" /Create /F /IT /TN 'DSH-Restart-Overlay' /TR $action /SC ONCE /ST 00:00 2>&1 | ForEach-Object { Log ([string]$_) }",
+    "    & \"$env:SystemRoot\\System32\\schtasks.exe\" /Run /TN 'DSH-Restart-Overlay' 2>&1 | ForEach-Object { Log ([string]$_) }",
+    "  } catch { Log ('overlay failed: ' + $_) }",
     "}",
-    "function Wait-Healthy($since) {",
-    `  $deadline = (Get-Date).AddSeconds(${timeoutSec})`,
-    "  while ((Get-Date) -lt $deadline) {",
-    "    if (FreshBoot $since) { return $true }",
-    "    Start-Sleep -Seconds 3",
+    "function Recover($command, $extra) {",
+    "  if (-not ((Test-Path -LiteralPath $node) -and (Test-Path -LiteralPath $recovery))) { Log ('recovery unavailable for ' + $command); return $false }",
+    "  & $node $recovery $command $extra 2>&1 | ForEach-Object { Log ([string]$_) }",
+    "  return $true",
+    "}",
+    "function Complete($verdict, $mode) {",
+    "  Log ('verdict: ' + $verdict)",
+    "  Recover ('done ' + $verdict) '' | Out-Null",
+    "  $ok = ($verdict -eq 'ok')",
+    "  if ($ok) { Write-State 'done' $true 'ok' } else { Write-State 'done' $false $mode }",
+    "}",
+    "function Wait-Healthy($sinceMs) {",
+    "  if ((Test-Path -LiteralPath $node) -and (Test-Path -LiteralPath $recovery)) {",
+    "    & $node $recovery wait $sinceMs $timeout 2>&1 | ForEach-Object { Log ([string]$_) }",
+    "    return ($LASTEXITCODE -eq 0)",
+    "  }",
+    "  Log 'recovery script unavailable: falling back to the boot marker'",
+    "  $since = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$sinceMs).UtcDateTime",
+    "  $deadline = (Get-Date).ToUniversalTime().AddSeconds($timeout)",
+    "  while ((Get-Date).ToUniversalTime() -lt $deadline) {",
+    "    if (Test-Path -LiteralPath $boot) {",
+    "      try { $b = Get-Content -LiteralPath $boot -Raw | ConvertFrom-Json; if ([datetime]$b.at -gt $since) { return $true } } catch { }",
+    "    }",
+    "    Start-Sleep -Milliseconds 1500",
     "  }",
     "  return $false",
     "}",
-    "function Kill-App { & \"$env:SystemRoot\\System32\\taskkill.exe\" /IM 'DeepSeek Harness.exe' /T /F *>> $log }",
+    "function Kill-App { & \"$env:SystemRoot\\System32\\taskkill.exe\" /IM 'DeepSeek Harness.exe' /T /F 2>&1 | ForEach-Object { Log ([string]$_) } }",
+    "function Start-App { Recover 'apply-profile' $profile | Out-Null; Start-Process -FilePath $exe; Log 'started' }",
     "Log 'watchdog start'",
+    "Write-State 'restart' $false ''",
+    "& \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart-Overlay' /F 2>&1 | ForEach-Object { Log ([string]$_) }",
+    "Start-Overlay",
     `Start-Sleep -Milliseconds ${delayMs}`,
-    `& "$env:SystemRoot\\System32\\taskkill.exe" /PID ${appPid} /T /F *>> $log`,
+    `& "$env:SystemRoot\\System32\\taskkill.exe" /PID ${appPid} /T /F 2>&1 | ForEach-Object { Log ([string]$_) }`,
     "Log 'killed'",
     "Start-Sleep -Milliseconds 1500",
     "Purge-Cookies",
-    "Start-Process -FilePath $exe",
-    "Log 'started'",
-    "if (Wait-Healthy $startedAt) { Log 'healthy'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F *>> $log; exit 0 }",
-    "if (AuthFailureSince $startedAt) {",
+    "Start-App",
+    "$since = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()",
+    "if (Wait-Healthy $since) { Log 'healthy'; Complete 'ok' ''; Recover 'mark-good' '' | Out-Null; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F 2>&1 | ForEach-Object { Log ([string]$_) }; exit 0 }",
+    "if (AuthFailureSince (Get-Date).AddSeconds(-$timeout)) {",
     "  Log 'auth failure detected: purged stale cookies, retrying the start'",
     "  Purge-Cookies",
-    "  Start-Process -FilePath $exe",
-    "  if (Wait-Healthy $startedAt) { Log 'healthy after cookie purge'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F *>> $log; exit 0 }",
+    "  Start-App",
+    "  $since = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()",
+    "  if (Wait-Healthy $since) { Log 'healthy after cookie purge'; Complete 'ok' ''; Recover 'mark-good' '' | Out-Null; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F 2>&1 | ForEach-Object { Log ([string]$_) }; exit 0 }",
     "  Log 'still failing after the cookie purge'",
     "}",
-    "if (-not (HashesMatch)) { Log 'token invalidated or files changed manually: skipping the rollback'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F *>> $log; exit 0 }",
-    "Log 'timeout: rolling back the profile backup'",
-    "if ($backup -ne '' -and (Test-Path $backup)) { Copy-Item -Path (Join-Path $backup '*') -Destination $profile -Force -Recurse -ErrorAction SilentlyContinue }",
-    "$payload = ConvertTo-Json @{ failed = $true; at = (Get-Date).ToString('o') }",
-    "[System.IO.File]::WriteAllText($failed, $payload, (New-Object System.Text.UTF8Encoding($false)))",
+    "Log 'boot is not healthy: rolling back and quarantining the suspects'",
+    "Write-State 'rollback' $false ''",
+    "Recover 'rollback' '' | Out-Null",
     "Kill-App",
     "Start-Sleep -Milliseconds 2000",
-    "$rollbackAt = Get-Date",
-    "Start-Process -FilePath $exe",
-    "Log 'restarted after rollback'",
-    "if (Wait-Healthy $rollbackAt) { Log 'healthy after rollback'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F *>> $log; exit 0 }",
-    "Log 'still failing: disabling the third-party restart bundle'",
-    "$pkgPath = Join-Path $profile 'package.json'",
-    "try {",
-    "  $pkg = Get-Content -LiteralPath $pkgPath -Raw | ConvertFrom-Json",
-    "  $pkg.dsh.profile.bundles = @($pkg.dsh.profile.bundles | Where-Object { $_ -ne 'dsh-restart' })",
-    "  $json = $pkg | ConvertTo-Json -Depth 12",
-    "  [System.IO.File]::WriteAllText($pkgPath, $json, (New-Object System.Text.UTF8Encoding($false)))",
-    "  Log 'dsh-restart bundle removed from the profile'",
-    "} catch { Log ('disable failed: ' + $_) }",
+    "Start-App",
+    "$since = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()",
+    "if (Wait-Healthy $since) { Log 'healthy after rollback'; Complete 'fail' 'recovered'; Recover 'mark-good' '' | Out-Null; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F 2>&1 | ForEach-Object { Log ([string]$_) }; exit 0 }",
+    "Log 'still failing: entering safe mode'",
+    "Write-State 'safe-mode' $false ''",
+    "Recover 'safe' '' | Out-Null",
     "Kill-App",
     "Start-Sleep -Milliseconds 2000",
-    "Start-Process -FilePath $exe",
-    "Log 'started without the plugin'",
-    "& \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F *>> $log",
+    "Start-App",
+    "$since = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()",
+    "if (Wait-Healthy $since) { Log 'booted in safe mode'; Complete 'fail' 'failed'; & \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F 2>&1 | ForEach-Object { Log ([string]$_) }; exit 0 }",
+    "Log 'safe mode did not boot either: giving up'",
+    "Complete 'fail' 'failed'",
+    "& \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F 2>&1 | ForEach-Object { Log ([string]$_) }",
   ].join('\r\n');
-  writeFileSync(helperPath, helper);
+  // Windows PowerShell 5.1 reads a .ps1 without a BOM as ANSI, which mangles
+  // every Cyrillic literal and breaks the quoting.
+  writeFileSync(helperPath, `\uFEFF${helper}`);
 
   if (process.platform === 'win32' && watchdogEnabled === false) {
     const plain = [
@@ -270,14 +480,14 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
       `$log = '${logPath.replace(/'/g, "''")}'`,
       "Add-Content -LiteralPath $log -Value ('plain restart ' + (Get-Date -Format o))",
       `Start-Sleep -Milliseconds ${delayMs}`,
-      `& "$env:SystemRoot\\System32\\taskkill.exe" /PID ${appPid} /T /F *>> $log`,
+      `& "$env:SystemRoot\\System32\\taskkill.exe" /PID ${appPid} /T /F 2>&1 | ForEach-Object { Log ([string]$_) }`,
       "Start-Sleep -Milliseconds 1500",
       "$candidate = Join-Path $env:USERPROFILE '.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/python/python.exe'",
       "if (Test-Path -LiteralPath $candidate) { $python = $candidate } else { $python = (Get-Command python.exe -ErrorAction SilentlyContinue).Source }",
       `$scripts = '${cookieScript.replace(/'/g, "''")}'`,
       "if ($python -and (Test-Path -LiteralPath $scripts)) { & $python $scripts 2>&1 | ForEach-Object { Add-Content -LiteralPath $log -Value ([string]$_) } }",
       `Start-Process -FilePath '${exe.replace(/'/g, "''")}'`,
-      "& \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F *>> $log",
+      "& \"$env:SystemRoot\\System32\\schtasks.exe\" /Delete /TN 'DSH-Restart' /F 2>&1 | ForEach-Object { Log ([string]$_) }",
     ].join('\r\n');
     writeFileSync(helperPath, plain);
     const create = await runTask([
@@ -307,9 +517,28 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
     return;
   }
 
-  const open = process.platform === 'darwin' ? `open -a "${exe}"` : `"${exe}" >/dev/null 2>&1 &`;
-  const script = `sleep ${(delayMs / 1000).toFixed(1)}; kill -TERM ${appPid} 2>/dev/null; sleep 1; ${open}`;
-  const launcher = spawn('/bin/sh', ['-c', script], { detached: true, stdio: 'ignore' });
+  // POSIX: the same chain as the Windows helper — overlay, kill, start, wait,
+  // rollback, safe mode — driven by the shared recovery script, so both
+  // platforms decide with one implementation.
+  const shHelperPath = join(dataDir(), 'restart-helper.sh');
+  const shTemplate = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'src', 'helper.sh'), 'utf8');
+  const quoteSh = (value) => String(value).replace(/'/g, "'\\''");
+  const shHelper = shTemplate
+    .replaceAll('@LOG@', quoteSh(logPath))
+    .replaceAll('@NODE@', quoteSh(nodeBinary()))
+    .replaceAll('@RECOVERY@', quoteSh(join(dirname(fileURLToPath(import.meta.url)), 'src', 'recovery.mjs')))
+    .replaceAll('@LAUNCHER@', quoteSh(launcherPath))
+    .replaceAll('@EXE@', quoteSh(exe))
+    .replaceAll('@APP_PID@', String(appPid))
+    .replaceAll('@TIMEOUT@', String(timeoutSec))
+    .replaceAll('@DELAY@', (delayMs / 1000).toFixed(1));
+  writeFileSync(shHelperPath, shHelper);
+  try {
+    execFileSync('chmod', ['+x', shHelperPath]);
+  } catch {
+    // A filesystem without chmod still runs it through /bin/sh below.
+  }
+  const launcher = spawn('/bin/sh', [shHelperPath], { detached: true, stdio: 'ignore' });
   launcher.unref();
 };
 
@@ -322,7 +551,7 @@ export function apply(ctx, config = {}) {
     language: 'ru',
     toolEnabled: config.toolEnabled !== false,
     watchdogEnabled: config.watchdogEnabled !== false,
-    watchdogSeconds: Number.isFinite(config.watchdogSeconds) ? Number(config.watchdogSeconds) : 10,
+    watchdogSeconds: Number.isFinite(config.watchdogSeconds) ? Number(config.watchdogSeconds) : 45,
   });
 
   const profileDir = (() => {
@@ -336,8 +565,9 @@ export function apply(ctx, config = {}) {
     return join(homedir(), '.dsh', 'profiles', process.env.DSH_PROFILE ?? 'desktop');
   })();
 
-  // Last configuration that booted successfully: the rollback target.
-  snapshotGood(profileDir);
+  // Snapshot a manual start as the rollback target; a watchdog start marks the
+  // profile good in the helper only after it verified a healthy boot.
+  if (!existsSync(prestartPath())) snapshotGood(profileDir);
 
   // Proof of a healthy boot for the restart watchdog; also invalidates the
   // restart token, so a watchdog from an earlier restart cannot touch this run.
@@ -428,24 +658,27 @@ export function apply(ctx, config = {}) {
       token,
       sessionId: typeof options.sessionId === 'string' && options.sessionId.length > 0 ? options.sessionId : null,
       at: new Date().toISOString(),
-      reason: options.reason ?? 'manual',
+      reason: typeof options.reason === 'string' ? options.reason.slice(0, 200) : 'manual',
+      note: typeof options.note === 'string' ? options.note.slice(0, 300) : '',
+      plugins: Array.isArray(options.plugins) ? options.plugins.filter((name) => typeof name === 'string').slice(0, 8) : [],
     };
     // Only the agent tool resumes the session; a manual restart from the
     // sidebar just brings the app back.
     if (options.continue === false) clearMarker();
     else writeMarker(marker);
-    // The watchdog is bound to this restart only: any later boot or restart
-    // replaces/removes this file, and the stale watchdog then does nothing.
-    writeFileSync(watchdogPath(), JSON.stringify({
+    // The watchdog is bound to this restart only: the recovery script compares
+    // the profile files with this snapshot and refuses to roll back over manual
+    // edits made afterwards.
+    const runtime = effective();
+    writePrestart({
+      profileDir,
       token,
-      at: marker.at,
-      sessionId: marker.sessionId,
-      // A rollback is only safe while the files are still the ones this
-      // restart started from; any manual edit cancels it.
-      hashes: profileHashes(profileDir),
-    }, null, 2));
+      timeoutSeconds: runtime.watchdogSeconds,
+      reason: marker.reason,
+      plugins: marker.plugins,
+    });
     try {
-      await scheduleRestart({ appPid, exe, profileDir, token, ...effective() });
+      await scheduleRestart({ appPid, exe, profileDir, token, ...runtime });
     } catch (error) {
       clearMarker();
       throw error;
@@ -455,6 +688,14 @@ export function apply(ctx, config = {}) {
 
   // Diagnostics: did the client bundle actually initialize in this page?
   const seen = { clientLoaded: 0, pendingReads: 0, lastClientAt: null };
+  // One page load owns the continuation at a time: a second client asking inside
+  // this window gets no marker, which is what stops a doubled message.
+  const claimLock = { token: null, at: 0 };
+  // A continuation already posted for this session within ten seconds is not
+  // repeated: two boots of the same restart must read as one message.
+  const lastContinue = new Map();
+
+  const CLAIM_WINDOW_MS = 15_000;
 
   // Small local bridge: the sidebar button and the "continue" flow read and
   // write the same marker the tool uses.
@@ -484,7 +725,7 @@ export function apply(ctx, config = {}) {
           language: 'ru',
           toolEnabled: config.toolEnabled !== false,
           watchdogEnabled: config.watchdogEnabled !== false,
-          watchdogSeconds: Number.isFinite(config.watchdogSeconds) ? Number(config.watchdogSeconds) : 10,
+          watchdogSeconds: Number.isFinite(config.watchdogSeconds) ? Number(config.watchdogSeconds) : 45,
         },
         options: LANGUAGES,
         file: settingsStore.file,
@@ -509,28 +750,66 @@ export function apply(ctx, config = {}) {
     }
 
     if (req.method === 'GET' && url.pathname === '/claim') {
-      // Atomic: only one page load may consume the restart marker, so a double
-      // boot cannot post the auto message twice.
+      // The marker survives the claim: a boot with a broken plugin loads the page
+      // but has no composer, so "continue" cannot be submitted there. The retry
+      // after the recovery must still find it, and only a successful submit
+      // (`/consumed`) retires it. That keeps a double boot from posting twice
+      // without losing the message the first time.
       const marker = readMarker();
-      if (marker) clearMarker();
       let failed = false;
       try {
         failed = existsSync(failedPath());
-        if (failed) rmSync(failedPath(), { force: true });
       } catch {
         failed = false;
       }
+      // A recovered boot is still a normal continuation: the watchdog fixed the
+      // app and only a plugin is missing. Only an unrecovered one (safe mode)
+      // tells the agent that the restart failed.
+      let recovered = false;
+      if (failed) {
+        const report = readJson(failedPath());
+        // A restored profile counts as recovered too: nothing was disabled, the
+        // configuration was simply put back.
+        recovered = report?.safeMode !== true && ((report?.quarantined?.length ?? 0) > 0 || report?.restored === true);
+      }
+      // A second client inside the window gets nothing: the first one owns the
+      // marker until it either submits or releases it.
+      let delivered = marker;
+      if (delivered !== null && delivered.sessionId && Date.now() - (lastContinue.get(delivered.sessionId) ?? 0) < 10_000) {
+        delivered = null;
+      }
+      // The delivered flag lives in the marker file, so it survives an app
+      // restart and a second window: only one client may post the continuation.
+      // A failed attempt clears it through /claim/release, which is what keeps
+      // the retry after a broken boot working.
+      const deliveredAt = marker !== null ? Date.parse(String(marker.deliveredAt ?? '')) : Number.NaN;
+      if (delivered !== null && Number.isFinite(deliveredAt) && Date.now() - deliveredAt < 90_000) {
+        delivered = null;
+      }
+      if (marker !== null && claimLock.token === marker.token && Date.now() - claimLock.at < CLAIM_WINDOW_MS) {
+        delivered = null;
+      } else if (marker !== null) {
+        claimLock.token = marker.token;
+        claimLock.at = Date.now();
+        if (delivered !== null) {
+          try {
+            writeMarker({ ...marker, deliveredAt: new Date().toISOString() });
+          } catch {
+            // The in-memory lock still protects this process.
+          }
+        }
+      }
       let queued = false;
-      if (marker?.sessionId) {
+      if (delivered?.sessionId) {
         try {
-          const agent = ctx.get?.('agents')?.get?.(marker.sessionId);
+          const agent = ctx.get?.('agents')?.get?.(delivered.sessionId);
           const inbox = agent?.inbox;
           queued = (inbox?.nextTurn?.length ?? 0) + (inbox?.nextStep?.length ?? 0) > 0;
         } catch {
           queued = false;
         }
       }
-      send(200, { marker, queued, failed });
+      send(200, { marker: delivered, queued, failed, recovered, locked: delivered === null && marker !== null });
       return;
     }
 
@@ -559,7 +838,118 @@ export function apply(ctx, config = {}) {
     if (req.method === 'GET' && url.pathname === '/client-loaded') {
       seen.clientLoaded += 1;
       seen.lastClientAt = new Date().toISOString();
+      // The only proof that the renderer really came up: a fresh marker here
+      // plus no crash log is what the watchdog calls a healthy boot.
+      writeJson(clientReadyPath(), { at: seen.lastClientAt, pid: appPid });
       send(200, { ok: true, seen });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/errors') {
+      // Renderer failures reported by the client half: the watchdog quarantines
+      // a plugin only when the same one keeps appearing here.
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; if (body.length > 65536) req.destroy(); });
+      req.on('end', () => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const items = Array.isArray(parsed?.items) ? parsed.items : [parsed];
+          const boot = readJson(bootPath())?.at ?? null;
+          const previous = readJson(errorsPath()) ?? { boot, items: [] };
+          const merged = [...(previous.items ?? []), ...items
+            .filter((item) => item && typeof item === 'object')
+            .map((item) => ({
+              plugin: typeof item.plugin === 'string' ? item.plugin : null,
+              message: String(item.message ?? '').slice(0, 500),
+              at: typeof item.at === 'string' ? item.at : new Date().toISOString(),
+            }))]
+            .slice(-200);
+          writeJson(errorsPath(), { boot, items: merged });
+        } catch {
+          // Diagnostics must never break the page.
+        }
+        send(200, { ok: true });
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/profile/restore') {
+      // Restore the profile without touching a running app: the files are
+      // staged, the app is restarted, and the helper applies them while it is
+      // down. This is the only safe way to edit package.json on a live session.
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; if (body.length > 65536) req.destroy(); });
+      req.on('end', async () => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const staged = stageProfileRestore(parsed);
+          const marker = await request({ sessionId: parsed.sessionId ?? null, reason: 'profile-restore' });
+          send(200, { ok: true, staged, marker });
+        } catch (error) {
+          send(500, { ok: false, error: String(error?.message ?? error) });
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'GET' && url.pathname === '/failed') {
+      send(200, {
+        failed: readJson(failedPath()),
+        quarantine: readJson(quarantinePath()),
+        safeMode: readJson(safeModePath()),
+        errors: (readJson(errorsPath())?.items ?? []).slice(-20),
+      });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/claim/release') {
+      // This client could not submit: keep the marker for the retry after the
+      // recovery, clear the delivered flag and let another page load claim it.
+      claimLock.token = null;
+      claimLock.at = 0;
+      const current = readMarker();
+      if (current !== null) {
+        try {
+          const rest = { ...current };
+          delete rest.deliveredAt;
+          writeMarker(rest);
+        } catch {
+          // A marker that cannot be rewritten keeps the in-memory release.
+        }
+      }
+      send(200, { ok: true });
+      return;
+    }
+
+    if (req.method === 'POST' && url.pathname === '/failed/dismiss') {
+      rmSync(failedPath(), { force: true });
+      send(200, { ok: true });
+      return;
+    }
+
+    if (req.method === 'POST' && (url.pathname === '/safe-mode/restore' || url.pathname === '/quarantine/restore')) {
+      // Restoring never writes the profile under a running app: the bundle list
+      // is staged and applied by the helper while the app is down.
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; if (body.length > 65536) req.destroy(); });
+      req.on('end', async () => {
+        try {
+          const parsed = body ? JSON.parse(body) : {};
+          const safeMode = url.pathname === '/safe-mode/restore';
+          const state = readJson(safeMode ? safeModePath() : quarantinePath());
+          const names = (safeMode ? state?.removed : (state?.entries ?? []).map((entry) => entry.name)) ?? [];
+          const bundles = readBundles(profileDir);
+          for (const name of names) {
+            if (typeof name === 'string' && !bundles.includes(name)) bundles.push(name);
+          }
+          stageProfileRestore({ bundles });
+          rmSync(safeMode ? safeModePath() : quarantinePath(), { force: true });
+          const marker = await request({ sessionId: parsed.sessionId ?? null, reason: safeMode ? 'safe-mode-restore' : 'quarantine-restore' });
+          send(200, { ok: true, restored: names.length, marker });
+        } catch (error) {
+          send(500, { ok: false, error: String(error?.message ?? error) });
+        }
+      });
       return;
     }
 
@@ -570,7 +960,12 @@ export function apply(ctx, config = {}) {
 
     if (req.method === 'POST' && (url.pathname === '/restart' || url.pathname === '/consumed')) {
       if (url.pathname === '/consumed') {
+        // Called only after the client actually submitted "continue", or after it
+        // decided the message can never be delivered.
+        const consumed = readMarker();
+        if (consumed?.sessionId) lastContinue.set(consumed.sessionId, Date.now());
         clearMarker();
+        rmSync(failedPath(), { force: true });
         send(200, { ok: true });
         return;
       }
@@ -669,6 +1064,8 @@ export function apply(ctx, config = {}) {
           tracked: [...trackedJobs.keys()],
           live: perAgent,
           globalJobs: globalJobs.map((job) => `${job.id}:${job.status}:${job.sessionId ?? job.agentId ?? '?'}`),
+          watchdog: capabilities(),
+          watchdogWarnings: capabilityWarnings(),
         }, null, 2),
       };
     },
@@ -693,11 +1090,20 @@ export function apply(ctx, config = {}) {
     description:
       'Restart the DeepSeek Harness app so plugin or profile changes take effect. '
       + 'Use it only while developing DSH extensions and the user expects a restart — not for ordinary work, not just to refresh state. '
-      + 'It kills running jobs and reopens the session with [auto.continue]; preflight with { fake: true } or dsh_restart_status when unsure.',
+      + 'It kills running jobs and reopens the session with [auto.continue.<token>] (or [auto.continue.failed.<token>] after an unrecovered boot), so a duplicated or lost continuation is traceable; preflight with { fake: true } or dsh_restart_status when unsure.',
     parameters: obj({
       fake: {
         type: 'boolean',
         description: 'Run every preflight check but do not restart the app (for testing the guards)',
+      },
+      reason: {
+        type: 'string',
+        description: 'Short reason for the restart, written in the language of the conversation; the watchdog shows it in its window',
+      },
+      plugins: {
+        type: 'array',
+        items: { type: 'string' },
+        description: 'Extensions being worked on right now (one or more); the watchdog lists them in its window',
       },
     }),
     output: {
@@ -810,7 +1216,11 @@ export function apply(ctx, config = {}) {
         };
       }
 
-      const marker = await request({ sessionId, reason: 'tool' });
+      const marker = await request({
+        sessionId,
+        reason: typeof args.reason === 'string' && args.reason.trim() !== '' ? args.reason.trim() : 'tool',
+        plugins: Array.isArray(args.plugins) ? args.plugins : [],
+      });
       return {
         restarted: true,
         ...(marker.sessionId ? { sessionId: marker.sessionId } : {}),

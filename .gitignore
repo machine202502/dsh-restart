@@ -6,3 +6,5 @@ Thumbs.db
 .vscode/
 tests/*.tmp
 *.exe
+__pycache__/
+*.pyc
