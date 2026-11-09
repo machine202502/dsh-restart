@@ -3,7 +3,7 @@ name: Market index
 on:
   workflow_dispatch:
   schedule:
-    - cron: '17 */3 * * *'
+    - cron: '*/15 * * * *'
   push:
     branches: [main]
     paths:
