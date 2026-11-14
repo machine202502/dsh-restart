@@ -221,12 +221,12 @@
       },
       "versions": [
         {
-          "version": "0.11.1",
-          "publishTimestamp": 1794193688,
+          "version": "0.11.2",
+          "publishTimestamp": 1794620710,
           "source": {
             "type": "git",
             "url": "https://github.com/machine202502/dsh-pricing",
-            "commit": "1e4ca2d485f6b965f7a625c7f81b90f047232049"
+            "commit": "48e04d6a8de8d9655eb1aa08c3d8a555b3de0abc"
           }
         }
       ]
