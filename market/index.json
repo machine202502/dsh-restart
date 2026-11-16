@@ -230,6 +230,37 @@
           }
         }
       ]
+    },
+    {
+      "name": "@machine202502/dsh-peak-guard",
+      "title": {
+        "en": "Peak",
+        "ru": "Пик"
+      },
+      "description": {
+        "en": "Peak-tariff guard: warns a working session when the peak starts and resumes it when it ends",
+        "ru": "Сторож пикового тарифа: предупреждает работающую сессию о начале пика и возвращает её к работе в конце"
+      },
+      "icon": "icons/dsh-peak-guard.svg",
+      "author": "machine202502",
+      "homepage": "https://github.com/machine202502/dsh-peak-guard#readme",
+      "repository": {
+        "url": "https://github.com/machine202502/dsh-peak-guard"
+      },
+      "metadata": {
+        "category": "tools"
+      },
+      "versions": [
+        {
+          "version": "0.1.0",
+          "publishTimestamp": 1794790734,
+          "source": {
+            "type": "git",
+            "url": "https://github.com/machine202502/dsh-peak-guard",
+            "commit": "3a6b10e021bcd66c2c0040dc7990aa96454e7651"
+          }
+        }
+      ]
     }
   ]
 }
