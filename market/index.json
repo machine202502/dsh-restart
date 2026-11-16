@@ -79,10 +79,12 @@
       },
       "versions": [
         {
-          "version": "0.1.1",
-          "publishTimestamp": 1794192297,
+          "version": "0.1.2",
+          "publishTimestamp": 1794857009,
           "source": {
-            "type": "npm"
+            "type": "git",
+            "url": "https://github.com/machine202502/dsh-screenshoot",
+            "commit": "f2e05c78af6146c0598887eebbe8c8102c42bc88"
           }
         }
       ]
