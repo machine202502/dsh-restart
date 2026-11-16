@@ -32,6 +32,7 @@ const PLUGINS = [
   { dir: 'dsh-notify-win', category: 'ui', npm: true },
   { dir: 'dsh-voice-ext', category: 'integration', npm: true },
   { dir: 'dsh-pricing', category: 'tools', npm: false },
+  { dir: 'dsh-peak-guard', category: 'tools', npm: false },
 ]
 
 const CATEGORIES = {
