@@ -27,7 +27,7 @@ jobs:
       - name: Clone the plugin repositories
         run: |
           mkdir -p plugins
-          for repo in dsh-browser dsh-screenshoot dsh-restart dsh-choice dsh-notify-win dsh-voice-ext dsh-pricing; do
+          for repo in dsh-browser dsh-screenshoot dsh-restart dsh-choice dsh-notify-win dsh-voice-ext dsh-pricing dsh-peak-guard; do
             git clone --depth 1 "https://github.com/machine202502/$repo.git" "plugins/$repo"
           done
       - name: Rebuild the index
