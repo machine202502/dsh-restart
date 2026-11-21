@@ -80,11 +80,11 @@
       "versions": [
         {
           "version": "0.1.2",
-          "publishTimestamp": 1794857009,
+          "publishTimestamp": 1795252557,
           "source": {
             "type": "git",
             "url": "https://github.com/machine202502/dsh-screenshoot",
-            "commit": "f2e05c78af6146c0598887eebbe8c8102c42bc88"
+            "commit": "21ee08638e5ba1c8bc19837e929dc670ac8c7f2e"
           }
         }
       ]
@@ -224,11 +224,11 @@
       "versions": [
         {
           "version": "0.11.3",
-          "publishTimestamp": 1794855542,
+          "publishTimestamp": 1795252565,
           "source": {
             "type": "git",
             "url": "https://github.com/machine202502/dsh-pricing",
-            "commit": "843e5d78ffe12dafebb0fcc746db040ffc289cb4"
+            "commit": "8f29e6faf7619c8df6095a9c33f65a2c7bc5e8ed"
           }
         }
       ]
@@ -255,11 +255,11 @@
       "versions": [
         {
           "version": "0.1.0",
-          "publishTimestamp": 1794790734,
+          "publishTimestamp": 1795252567,
           "source": {
             "type": "git",
             "url": "https://github.com/machine202502/dsh-peak-guard",
-            "commit": "3a6b10e021bcd66c2c0040dc7990aa96454e7651"
+            "commit": "90e6d4890758068f4562332909af7e5fc9b2a023"
           }
         }
       ]
