@@ -132,7 +132,7 @@ window.__ModuleLoader__.load({
       }
     };
 
-    const PORT = 49233;
+    const PORT = 38033;
     const base = `http://127.0.0.1:${PORT}`;
     // The token after the dot makes a duplicated or lost continuation traceable
     // in the chat itself, not only in restart.log.

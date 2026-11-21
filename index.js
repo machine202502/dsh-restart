@@ -551,7 +551,7 @@ const scheduleRestart = async ({ appPid, exe, profileDir, token = '', watchdogEn
 };
 
 export function apply(ctx, config = {}) {
-  const port = config.bridgePort ?? 49233;
+  const port = config.bridgePort ?? 38033;
 
   // The profile patch is the deployment default; the form writes overrides.
   const settingsStore = createSettingsStore(dataDir());

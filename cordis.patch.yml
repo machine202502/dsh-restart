@@ -2,7 +2,7 @@
     - id: restart
       name: '@machine202502/dsh-restart'
       config:
-        bridgePort: 49233
+        bridgePort: 38033
         toolEnabled: true
         watchdogEnabled: true
         watchdogSeconds: 10

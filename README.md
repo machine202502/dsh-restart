@@ -38,7 +38,7 @@ the helper moves them into place while the app is down. Editing `package.json` o
 
 ## Auto-continue
 
-After the start the client reads the marker through the local bridge `127.0.0.1:49233`:
+After the start the client reads the marker through the local bridge `127.0.0.1:38033`:
 
 ```
 GET  /claim           → { marker } — one client at a time, the delivery flag lives in the marker
